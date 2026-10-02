@@ -8,17 +8,56 @@ import (
 	"math"
 	"slices"
 	"strings"
+	"time"
 )
 
-// Budget limits the total amount of expenses in a category.
+// Budget limits the total amount of expenses in a category. With a Period
+// the limit starts over every calendar month or year.
 type Budget struct {
 	Category string  `json:"category"`
 	Limit    float64 `json:"limit"`
+	Period   Period  `json:"period,omitempty"`
+}
+
+// Period sets which transactions of a category share one budget limit.
+type Period string
+
+// Supported budget periods.
+const (
+	PeriodNone  Period = ""      // all transactions, whatever their dates
+	PeriodMonth Period = "month" // transactions of the same calendar month
+	PeriodYear  Period = "year"  // transactions of the same calendar year
+)
+
+// label returns the name of the period of p that contains t: "2026-10" for
+// PeriodMonth, "2026" for PeriodYear and "" for PeriodNone. Transactions with
+// equal labels share one limit. The month and the year are taken in the
+// location of t, as written on the receipt.
+func (p Period) label(t time.Time) string {
+	switch p {
+	case PeriodMonth:
+		return t.Format("2006-01")
+	case PeriodYear:
+		return t.Format("2006")
+	default:
+		return ""
+	}
+}
+
+// valid reports whether p is one of the supported periods.
+func (p Period) valid() bool {
+	switch p {
+	case PeriodNone, PeriodMonth, PeriodYear:
+		return true
+	default:
+		return false
+	}
 }
 
 // Errors returned for invalid budgets and for transactions over budget.
 var (
 	ErrInvalidLimit   = errors.New("invalid limit")
+	ErrInvalidPeriod  = errors.New("invalid period")
 	ErrBudgetExceeded = errors.New("budget exceeded")
 )
 
@@ -26,14 +65,19 @@ var (
 // budget of its category. errors.Is(err, ErrBudgetExceeded) matches it.
 type BudgetExceededError struct {
 	Category string
+	Period   string  // label of the budget period, such as "2026-10"; "" if the budget has no period
 	Limit    float64 // budget limit of the category
-	Spent    float64 // amount already spent in the category
+	Spent    float64 // amount already spent in the category within the period
 	Amount   float64 // amount of the rejected transaction
 }
 
 func (e *BudgetExceededError) Error() string {
-	return fmt.Sprintf("budget exceeded for %q: spent %.2f + new %.2f > limit %.2f",
-		e.Category, e.Spent, e.Amount, e.Limit)
+	var period string
+	if e.Period != "" {
+		period = " in " + e.Period
+	}
+	return fmt.Sprintf("budget exceeded for %q%s: spent %.2f + new %.2f > limit %.2f",
+		e.Category, period, e.Spent, e.Amount, e.Limit)
 }
 
 // Is makes errors.Is(err, ErrBudgetExceeded) report true.
@@ -68,8 +112,9 @@ func ListBudgets() []Budget {
 }
 
 // LoadBudgets reads a JSON array of budgets from r, for example
-// [{"category": "еда", "limit": 5000}], and sets each of them with SetBudget.
-// Nothing is changed unless the whole input is valid.
+// [{"category": "еда", "limit": 5000, "period": "month"}], and sets each of
+// them with SetBudget. The period is optional. Nothing is changed unless the
+// whole input is valid.
 func LoadBudgets(r io.Reader) error {
 	dec := json.NewDecoder(r)
 	dec.DisallowUnknownFields()
@@ -125,31 +170,44 @@ func normalizeBudget(b Budget) (Budget, error) {
 		return Budget{}, fmt.Errorf("%w %v for %q: must be from %g to %g",
 			ErrInvalidLimit, b.Limit, b.Category, minAmount, maxAmount)
 	}
+	if !b.Period.valid() {
+		return Budget{}, fmt.Errorf("%w %q for %q: must be %q, %q or empty",
+			ErrInvalidPeriod, b.Period, b.Category, PeriodMonth, PeriodYear)
+	}
 	b.Limit = roundToKopecks(b.Limit)
 	return b, nil
 }
 
 // checkBudget returns a *BudgetExceededError if tx does not fit into the
-// budget of its category. Categories without a budget are not limited.
+// budget of its category within the period that contains tx.Date.
+// Categories without a budget are not limited.
 func checkBudget(tx Transaction) error {
 	b, ok := budgets[tx.Category]
 	if !ok {
 		return nil
 	}
-	spent := spentIn(tx.Category)
+	spent := spentIn(tx.Category, b.Period, tx.Date)
 	// Amounts and limits are whole kopecks, so compare kopecks: float sums
 	// like 0.1+0.2 are not exactly 0.3. maxAmount keeps the product finite.
 	if math.Round((spent+tx.Amount)*100) > math.Round(b.Limit*100) {
-		return &BudgetExceededError{Category: tx.Category, Limit: b.Limit, Spent: spent, Amount: tx.Amount}
+		return &BudgetExceededError{
+			Category: tx.Category,
+			Period:   b.Period.label(tx.Date),
+			Limit:    b.Limit,
+			Spent:    spent,
+			Amount:   tx.Amount,
+		}
 	}
 	return nil
 }
 
-// spentIn returns the total amount of the stored transactions in category.
-func spentIn(category string) float64 {
+// spentIn returns the total amount of the stored transactions in category
+// that fall into the same period of p as date.
+func spentIn(category string, p Period, date time.Time) float64 {
+	period := p.label(date)
 	var total float64
 	for _, tx := range transactions {
-		if tx.Category == category {
+		if tx.Category == category && p.label(tx.Date) == period {
 			total += tx.Amount
 		}
 	}

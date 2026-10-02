@@ -24,8 +24,8 @@ func main() {
 
 	// Initial budgets are set in code, then budgets.json adds and updates some.
 	for _, b := range []Budget{
-		{Category: "еда", Limit: 5000},
-		{Category: "транспорт", Limit: 2000},
+		{Category: "еда", Limit: 5000, Period: PeriodMonth},
+		{Category: "транспорт", Limit: 2000, Period: PeriodMonth},
 	} {
 		if err := SetBudget(b); err != nil {
 			fmt.Fprintln(os.Stderr, "Cannot set budget:", err)
@@ -40,17 +40,24 @@ func main() {
 		os.Exit(1)
 	}
 	fmt.Printf("Budgets loaded from %s\n\n", *budgetsPath)
-	printBudgets(os.Stdout)
+	printBudgets(os.Stdout, time.Now())
+
+	// The last day of the previous month. Transactions without a date get
+	// the current one.
+	now := time.Now()
+	lastMonth := now.AddDate(0, 0, -now.Day())
 
 	fmt.Println("\nAdding transactions:")
 	for _, tx := range []Transaction{
 		{Amount: 1250.50, Category: "еда", Description: "продукты на неделю"},
 		{Amount: 2000, Category: "транспорт", Description: "проездной"},
 		{Amount: 3500, Category: "еда", Description: "кафе"},
-		{Amount: 500, Category: "еда", Description: "ресторан"},         // over the budget
+		{Amount: 500, Category: "еда", Description: "ресторан"},         // over the monthly budget
 		{Amount: 249.50, Category: "еда", Description: "хлеб и молоко"}, // exactly up to the limit
-		{Amount: 700, Category: "здоровье", Description: "лекарства"},   // category without a budget
-		{Amount: 0, Category: "еда", Description: "пустой чек"},         // invalid amount
+		// The previous month has its own limit, so this one fits.
+		{Amount: 500, Category: "еда", Description: "ресторан в прошлом месяце", Date: lastMonth},
+		{Amount: 700, Category: "здоровье", Description: "лекарства"}, // category without a budget
+		{Amount: 0, Category: "еда", Description: "пустой чек"},       // invalid amount
 	} {
 		addAndReport(tx)
 	}
@@ -61,7 +68,7 @@ func main() {
 	fmt.Println()
 	printTransactions(os.Stdout, ListTransactions())
 	fmt.Println()
-	printBudgets(os.Stdout)
+	printBudgets(os.Stdout, time.Now())
 }
 
 // loadBudgetsFromFile loads budgets from the JSON file at path.
@@ -101,6 +108,7 @@ func showLoadErrors() {
 		{name: "broken JSON", input: `[{"category": "кафе", "limit": 1000`},
 		{name: "wrong type", input: `[{"category": "кафе", "limit": "много"}]`},
 		{name: "invalid limit", input: `[{"category": "кафе", "limit": 1000}, {"category": "такси", "limit": -5}]`},
+		{name: "invalid period", input: `[{"category": "кафе", "limit": 1000, "period": "week"}]`},
 	} {
 		fmt.Printf("  %s: %v\n", c.name, LoadBudgets(strings.NewReader(c.input)))
 	}
@@ -120,14 +128,20 @@ func printTransactions(w io.Writer, txs []Transaction) {
 }
 
 // printBudgets writes every budget with the amounts spent and left to w.
-func printBudgets(w io.Writer) {
+// The amounts are for the budget period that contains now.
+func printBudgets(w io.Writer, now time.Time) {
 	list := ListBudgets()
 	fmt.Fprintf(w, "Budgets (%d):\n", len(list))
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "CATEGORY\tLIMIT\tSPENT\tLEFT")
+	fmt.Fprintln(tw, "CATEGORY\tPERIOD\tLIMIT\tSPENT\tLEFT")
 	for _, b := range list {
-		spent := spentIn(b.Category)
-		fmt.Fprintf(tw, "%s\t%.2f\t%.2f\t%.2f\n", b.Category, b.Limit, spent, remaining(b.Limit, spent))
+		period := b.Period.label(now)
+		if period == "" {
+			period = "all time"
+		}
+		spent := spentIn(b.Category, b.Period, now)
+		fmt.Fprintf(tw, "%s\t%s\t%.2f\t%.2f\t%.2f\n",
+			b.Category, period, b.Limit, spent, remaining(b.Limit, spent))
 	}
 	tw.Flush()
 }

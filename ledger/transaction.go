@@ -38,7 +38,8 @@ var transactions = []Transaction{}
 // The amount is rounded to kopecks, the category is normalized with
 // normalizeCategory, the description is trimmed, and a zero date is replaced
 // with the current time. If the category has a budget and tx does not fit
-// into it, AddTransaction returns a *BudgetExceededError and stores nothing.
+// into it within the budget period of tx.Date, AddTransaction returns
+// a *BudgetExceededError and stores nothing.
 func AddTransaction(tx Transaction) error {
 	if !inAmountRange(tx.Amount) {
 		return fmt.Errorf("%w %v: must be from %g to %g", ErrInvalidAmount, tx.Amount, minAmount, maxAmount)
@@ -49,14 +50,15 @@ func AddTransaction(tx Transaction) error {
 		return ErrEmptyCategory
 	}
 	tx.Description = strings.TrimSpace(tx.Description)
+	// The budget period depends on the date, so set it before the check.
+	if tx.Date.IsZero() {
+		tx.Date = time.Now()
+	}
 	if err := checkBudget(tx); err != nil {
 		return err
 	}
 
 	tx.ID = len(transactions) + 1
-	if tx.Date.IsZero() {
-		tx.Date = time.Now()
-	}
 	transactions = append(transactions, tx)
 	return nil
 }

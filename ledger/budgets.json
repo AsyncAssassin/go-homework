@@ -1,5 +1,6 @@
 [
-  {"category": "еда", "limit": 5000},
-  {"category": "транспорт", "limit": 2500},
-  {"category": "развлечения", "limit": 3000}
+  {"category": "еда", "limit": 5000, "period": "month"},
+  {"category": "транспорт", "limit": 2500, "period": "month"},
+  {"category": "развлечения", "limit": 30000, "period": "year"},
+  {"category": "ремонт", "limit": 100000}
 ]
