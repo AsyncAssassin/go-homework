@@ -219,7 +219,8 @@ func TestAddTransactionBudgetZeroDate(t *testing.T) {
 	if err := SetBudget(Budget{Category: "еда", Limit: 1000, Period: PeriodMonth}); err != nil {
 		t.Fatalf("SetBudget() error = %v", err)
 	}
-	// Spending a second after the zero time.Time, in the same month as it.
+	// Spending a second after the zero time.Time: in every time zone it falls
+	// into the same month as a zero date would.
 	early := time.Time{}.Add(time.Second)
 	if err := AddTransaction(Transaction{Amount: 800, Category: "еда", Date: early}); err != nil {
 		t.Fatalf("AddTransaction() error = %v", err)
@@ -319,8 +320,8 @@ func TestLoadBudgets(t *testing.T) {
 		},
 		{
 			name:    "invalid period",
-			input:   `[{"category": "такси", "limit": 300, "period": "week"}]`,
-			wantErr: "budget #1: invalid period",
+			input:   `[{"category": "такси", "limit": 300, "period": " Week "}]`,
+			wantErr: `budget #1: invalid period " Week "`, // as written in the input
 		},
 		{name: "wrong period type", input: `[{"category": "такси", "limit": 300, "period": 1}]`, wantErr: "decode JSON"},
 		{

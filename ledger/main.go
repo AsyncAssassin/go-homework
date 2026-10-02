@@ -49,19 +49,16 @@ func main() {
 
 	fmt.Println("\nAdding transactions:")
 	for _, tx := range []Transaction{
-		{Amount: 1250.50, Category: "еда", Description: "продукты на неделю"},
-		{Amount: 2000, Category: "транспорт", Description: "проездной"},
-		{Amount: 3500, Category: "еда", Description: "кафе"},
-		{Amount: 500, Category: "еда", Description: "ресторан"},         // over the monthly budget
-		{Amount: 249.50, Category: "еда", Description: "хлеб и молоко"}, // exactly up to the limit
+		{Amount: 1250.50, Category: "еда", Description: "продукты на неделю", Date: now},
+		{Amount: 2000, Category: "транспорт", Description: "проездной", Date: now},
+		{Amount: 3500, Category: "еда", Description: "кафе", Date: now},
+		{Amount: 500, Category: "еда", Description: "ресторан", Date: now},         // over the monthly budget
+		{Amount: 249.50, Category: "еда", Description: "хлеб и молоко", Date: now}, // exactly up to the limit
 		// The previous month has its own limit, so this one fits.
 		{Amount: 500, Category: "еда", Description: "ресторан в прошлом месяце", Date: lastMonth},
-		{Amount: 700, Category: "здоровье", Description: "лекарства"}, // category without a budget
-		{Amount: 0, Category: "еда", Description: "пустой чек"},       // invalid amount
+		{Amount: 700, Category: "здоровье", Description: "лекарства", Date: now}, // category without a budget
+		{Amount: 0, Category: "еда", Description: "пустой чек", Date: now},       // invalid amount
 	} {
-		if tx.Date.IsZero() {
-			tx.Date = now
-		}
 		addAndReport(tx)
 	}
 

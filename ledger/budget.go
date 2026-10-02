@@ -170,11 +170,13 @@ func normalizeBudget(b Budget) (Budget, error) {
 		return Budget{}, fmt.Errorf("%w %v for %q: must be from %g to %g",
 			ErrInvalidLimit, b.Limit, b.Category, minAmount, maxAmount)
 	}
-	b.Period = Period(strings.ToLower(strings.TrimSpace(string(b.Period))))
-	if !b.Period.valid() {
+	period := Period(strings.ToLower(strings.TrimSpace(string(b.Period))))
+	if !period.valid() {
+		// Report the period as written, so it is easy to find in the input.
 		return Budget{}, fmt.Errorf("%w %q for %q: must be %q, %q or empty",
 			ErrInvalidPeriod, b.Period, b.Category, PeriodMonth, PeriodYear)
 	}
+	b.Period = period
 	b.Limit = roundToKopecks(b.Limit)
 	return b, nil
 }
