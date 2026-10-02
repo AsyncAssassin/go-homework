@@ -24,9 +24,12 @@ func main() {
 	srv := &http.Server{
 		Handler:           newRouter(),
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
-	log.Printf("Gateway service listening on %s", *addr)
+	log.Printf("Gateway service listening on %s", ln.Addr())
 	if err := srv.Serve(ln); err != nil {
 		log.Fatalf("Gateway service stopped: %v", err)
 	}

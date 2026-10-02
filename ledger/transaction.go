@@ -18,25 +18,31 @@ type Transaction struct {
 	Date        time.Time
 }
 
+// minAmount is the smallest accepted amount: one kopeck.
+const minAmount = 0.01
+
 // Errors returned by AddTransaction for invalid transactions.
 var (
-	ErrInvalidAmount = errors.New("amount must be a positive number")
+	ErrInvalidAmount = errors.New("invalid amount")
 	ErrEmptyCategory = errors.New("category must not be empty")
 )
 
-// transactions is the in-memory transaction storage. It starts empty.
+// transactions is the in-memory transaction storage. It starts empty and is
+// not safe for concurrent use.
 var transactions = []Transaction{}
 
 // AddTransaction validates tx, assigns it the next ID and stores it.
-// The category is trimmed, and a zero date is replaced with the current time.
+// Category and description are trimmed, and a zero date is replaced with
+// the current time.
 func AddTransaction(tx Transaction) error {
-	if math.IsNaN(tx.Amount) || math.IsInf(tx.Amount, 0) || tx.Amount <= 0 {
-		return fmt.Errorf("%w, got %v", ErrInvalidAmount, tx.Amount)
+	if math.IsNaN(tx.Amount) || math.IsInf(tx.Amount, 0) || tx.Amount < minAmount {
+		return fmt.Errorf("%w %v: must be a finite number of at least %.2f", ErrInvalidAmount, tx.Amount, minAmount)
 	}
 	tx.Category = strings.TrimSpace(tx.Category)
 	if tx.Category == "" {
 		return ErrEmptyCategory
 	}
+	tx.Description = strings.TrimSpace(tx.Description)
 
 	tx.ID = len(transactions) + 1
 	if tx.Date.IsZero() {

@@ -64,7 +64,7 @@ pong
 ### Ledger — бизнес-логика
 
 Хранит транзакции в памяти:
-- `AddTransaction(tx Transaction) error` — проверяет и добавляет транзакцию (сумма больше нуля, категория не пустая);
+- `AddTransaction(tx Transaction) error` — проверяет и добавляет транзакцию (сумма не меньше 0.01, категория не пустая);
 - `ListTransactions() []Transaction` — возвращает копию списка.
 
 `main` добавляет несколько транзакций, одну заведомо некорректную, и выводит список:
@@ -79,7 +79,7 @@ Ledger service started
 Added "продукты на неделю": 1250.50 (еда)
 Added "проездной": 300.00 (транспорт)
 Added "кино": 2000.00 (развлечения)
-Rejected "пустой чек": amount must be a positive number, got 0
+Rejected "пустой чек": invalid amount 0: must be a finite number of at least 0.01
 
 Transactions (3):
 ID  DATE        CATEGORY     AMOUNT   DESCRIPTION
