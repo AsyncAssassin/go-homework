@@ -64,7 +64,7 @@ pong
 ### Ledger — бизнес-логика
 
 Хранит транзакции в памяти:
-- `AddTransaction(tx Transaction) error` — проверяет и добавляет транзакцию (сумма не меньше 0.01, категория не пустая);
+- `AddTransaction(tx Transaction) error` — проверяет и добавляет транзакцию: сумма от 0.01 до 10¹², категория не пустая;
 - `ListTransactions() []Transaction` — возвращает копию списка.
 
 Запуск: `cd ledger && go run .`. Сейчас ledger показывает и бюджеты из ДЗ 3, пример вывода — в следующем разделе. Состояние на момент сдачи ДЗ 2 — по тегу [`hw2`](https://github.com/AsyncAssassin/go-homework/tree/hw2).
@@ -73,7 +73,8 @@ pong
 
 - `Budget{Category, Limit}` и хранилище бюджетов `map[string]Budget` (ключ — категория).
 - `SetBudget(b Budget) error` добавляет бюджет или обновляет существующий.
-- `AddTransaction` проверяет бюджет категории: если сумма трат вместе с новой транзакцией больше лимита, возвращается ошибка `*BudgetExceededError` (`errors.Is(err, ErrBudgetExceeded)`), и транзакция не сохраняется. Ровно до лимита — можно; категории без бюджета не ограничены. Суммы сравниваются в копейках, чтобы не мешала погрешность float.
+- `AddTransaction` проверяет бюджет категории: если сумма трат вместе с новой транзакцией больше лимита, возвращается ошибка `*BudgetExceededError` (`errors.Is(err, ErrBudgetExceeded)`), и транзакция не сохраняется. Ровно до лимита — можно; категории без бюджета не ограничены.
+- Суммы и лимиты округляются до копеек и сравниваются в копейках, чтобы не мешала погрешность float. Регистр и пробелы по краям в категориях не важны: «Еда » и «еда» — одна категория.
 - `LoadBudgets(r io.Reader) error` читает JSON-массив бюджетов и применяет его через `SetBudget`, только если весь файл корректный. Ошибки чтения и разбора возвращаются с понятным описанием.
 
 Начальные бюджеты задаются в коде через `SetBudget`, затем загружаются из `ledger/budgets.json` (`os.Open` + `bufio.NewReader`):
@@ -108,21 +109,21 @@ Adding transactions:
   rejected "ресторан": budget exceeded for "еда": spent 4750.50 + new 500.00 > limit 5000.00, only 249.50 left
   added    "хлеб и молоко" 249.50 (еда)
   added    "лекарства" 700.00 (здоровье)
-  rejected "пустой чек": invalid amount 0: must be a finite number of at least 0.01
+  rejected "пустой чек": invalid amount 0: must be from 0.01 to 1e+12
 
 Budget loading errors:
   broken JSON: load budgets: decode JSON: unexpected EOF
   wrong type: load budgets: decode JSON: json: cannot unmarshal string into Go struct field Budget.limit of type float64
-  invalid limit: load budgets: budget #2: invalid limit -5 for "такси": must be a finite number of at least 0.01
-  missing file: load budgets: open missing.json: no such file or directory
+  invalid limit: load budgets: budget #2: invalid limit -5 for "такси": must be from 0.01 to 1e+12
+  missing file: load budgets: open no-such-dir/budgets.json: no such file or directory
 
 Transactions (5):
 ID  DATE        CATEGORY   AMOUNT   DESCRIPTION
-1   2026-10-02  еда        1250.50  продукты на неделю
-2   2026-10-02  транспорт  2000.00  проездной
-3   2026-10-02  еда        3500.00  кафе
-4   2026-10-02  еда        249.50   хлеб и молоко
-5   2026-10-02  здоровье   700.00   лекарства
+1   2026-10-03  еда        1250.50  продукты на неделю
+2   2026-10-03  транспорт  2000.00  проездной
+3   2026-10-03  еда        3500.00  кафе
+4   2026-10-03  еда        249.50   хлеб и молоко
+5   2026-10-03  здоровье   700.00   лекарства
 
 Budgets (3):
 CATEGORY     LIMIT    SPENT    LEFT

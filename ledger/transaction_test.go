@@ -26,6 +26,7 @@ func TestAddTransaction(t *testing.T) {
 		{name: "negative amount", tx: Transaction{Amount: -50, Category: "еда"}, wantErr: ErrInvalidAmount},
 		{name: "NaN amount", tx: Transaction{Amount: math.NaN(), Category: "еда"}, wantErr: ErrInvalidAmount},
 		{name: "infinite amount", tx: Transaction{Amount: math.Inf(1), Category: "еда"}, wantErr: ErrInvalidAmount},
+		{name: "too large amount", tx: Transaction{Amount: 2e12, Category: "еда"}, wantErr: ErrInvalidAmount},
 		{name: "blank category", tx: Transaction{Amount: 100, Category: "  "}, wantErr: ErrEmptyCategory},
 	}
 
@@ -54,7 +55,7 @@ func TestAddTransactionFillsFields(t *testing.T) {
 	date := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 	for _, tx := range []Transaction{
 		{Amount: 10, Category: "еда", Date: date},
-		{Amount: 20, Category: " транспорт ", Description: "  проездной "},
+		{Amount: 20.004, Category: " Транспорт ", Description: "  проездной "},
 	} {
 		if err := AddTransaction(tx); err != nil {
 			t.Fatalf("AddTransaction() error = %v", err)
@@ -72,8 +73,11 @@ func TestAddTransactionFillsFields(t *testing.T) {
 		t.Error("zero date was not replaced with the current time")
 	}
 	if got[1].Category != "транспорт" || got[1].Description != "проездной" {
-		t.Errorf("category, description = %q, %q; want trimmed %q, %q",
+		t.Errorf("category, description = %q, %q; want normalized %q, %q",
 			got[1].Category, got[1].Description, "транспорт", "проездной")
+	}
+	if got[1].Amount != 20 {
+		t.Errorf("amount = %v, want it rounded to kopecks: 20", got[1].Amount)
 	}
 }
 

@@ -18,8 +18,11 @@ type Transaction struct {
 	Date        time.Time
 }
 
-// minAmount is the smallest accepted amount: one kopeck.
-const minAmount = 0.01
+// Accepted range for transaction amounts and budget limits, in rubles.
+const (
+	minAmount = 0.01 // one kopeck
+	maxAmount = 1e12
+)
 
 // Errors returned by AddTransaction for invalid transactions.
 var (
@@ -32,14 +35,16 @@ var (
 var transactions = []Transaction{}
 
 // AddTransaction validates tx, assigns it the next ID and stores it.
-// Category and description are trimmed, and a zero date is replaced with
-// the current time. If the category has a budget and tx does not fit into
-// it, AddTransaction returns a *BudgetExceededError and stores nothing.
+// The amount is rounded to kopecks, the category is normalized with
+// normalizeCategory, the description is trimmed, and a zero date is replaced
+// with the current time. If the category has a budget and tx does not fit
+// into it, AddTransaction returns a *BudgetExceededError and stores nothing.
 func AddTransaction(tx Transaction) error {
-	if math.IsNaN(tx.Amount) || math.IsInf(tx.Amount, 0) || tx.Amount < minAmount {
-		return fmt.Errorf("%w %v: must be a finite number of at least %.2f", ErrInvalidAmount, tx.Amount, minAmount)
+	if !inAmountRange(tx.Amount) {
+		return fmt.Errorf("%w %v: must be from %g to %g", ErrInvalidAmount, tx.Amount, minAmount, maxAmount)
 	}
-	tx.Category = strings.TrimSpace(tx.Category)
+	tx.Amount = roundToKopecks(tx.Amount)
+	tx.Category = normalizeCategory(tx.Category)
 	if tx.Category == "" {
 		return ErrEmptyCategory
 	}
@@ -60,4 +65,21 @@ func AddTransaction(tx Transaction) error {
 // cannot change the storage through the returned slice.
 func ListTransactions() []Transaction {
 	return slices.Clone(transactions)
+}
+
+// inAmountRange reports whether x is an acceptable amount or limit.
+// NaN fails every comparison, so it is rejected as well as infinities.
+func inAmountRange(x float64) bool {
+	return x >= minAmount && x <= maxAmount
+}
+
+// roundToKopecks rounds an amount in rubles to whole kopecks.
+func roundToKopecks(x float64) float64 {
+	return math.Round(x*100) / 100
+}
+
+// normalizeCategory trims spaces and lowercases the category, so "Еда " and
+// "еда" are the same category.
+func normalizeCategory(category string) string {
+	return strings.ToLower(strings.TrimSpace(category))
 }

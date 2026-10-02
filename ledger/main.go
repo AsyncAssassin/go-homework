@@ -85,7 +85,7 @@ func addAndReport(tx Transaction) {
 		fmt.Printf("  added    %q %.2f (%s)\n", tx.Description, tx.Amount, tx.Category)
 	case errors.As(err, &budgetErr):
 		fmt.Printf("  rejected %q: %v, only %.2f left\n",
-			tx.Description, err, budgetErr.Limit-budgetErr.Spent)
+			tx.Description, err, remaining(budgetErr.Limit, budgetErr.Spent))
 	default:
 		fmt.Printf("  rejected %q: %v\n", tx.Description, err)
 	}
@@ -104,7 +104,7 @@ func showLoadErrors() {
 	} {
 		fmt.Printf("  %s: %v\n", c.name, LoadBudgets(strings.NewReader(c.input)))
 	}
-	fmt.Printf("  missing file: %v\n", loadBudgetsFromFile("missing.json"))
+	fmt.Printf("  missing file: %v\n", loadBudgetsFromFile("no-such-dir/budgets.json"))
 }
 
 // printTransactions writes transactions to w as a table.
@@ -127,7 +127,13 @@ func printBudgets(w io.Writer) {
 	fmt.Fprintln(tw, "CATEGORY\tLIMIT\tSPENT\tLEFT")
 	for _, b := range list {
 		spent := spentIn(b.Category)
-		fmt.Fprintf(tw, "%s\t%.2f\t%.2f\t%.2f\n", b.Category, b.Limit, spent, b.Limit-spent)
+		fmt.Fprintf(tw, "%s\t%.2f\t%.2f\t%.2f\n", b.Category, b.Limit, spent, remaining(b.Limit, spent))
 	}
 	tw.Flush()
+}
+
+// remaining returns how much of the limit is still available. It is never
+// negative, even if the limit was lowered below the amount already spent.
+func remaining(limit, spent float64) float64 {
+	return max(0, limit-spent)
 }

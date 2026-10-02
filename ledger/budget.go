@@ -81,9 +81,16 @@ func LoadBudgets(r io.Reader) error {
 		}
 		return fmt.Errorf("load budgets: decode JSON: %w", err)
 	}
+	if list == nil {
+		return errors.New("load budgets: expected a JSON array of budgets, got null")
+	}
 	// The array must be the only value in the input.
-	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
-		return errors.New("load budgets: unexpected data after the JSON array")
+	tok, err := dec.Token()
+	switch {
+	case err == nil:
+		return fmt.Errorf("load budgets: unexpected data after the JSON array: %v", tok)
+	case !errors.Is(err, io.EOF):
+		return fmt.Errorf("load budgets: decode JSON: %w", err)
 	}
 
 	// Check every budget before changing the storage.
@@ -107,16 +114,18 @@ func LoadBudgets(r io.Reader) error {
 	return nil
 }
 
-// normalizeBudget trims the category and checks that the budget is valid.
+// normalizeBudget checks that the budget is valid, normalizes its category
+// and rounds the limit to kopecks.
 func normalizeBudget(b Budget) (Budget, error) {
-	b.Category = strings.TrimSpace(b.Category)
+	b.Category = normalizeCategory(b.Category)
 	if b.Category == "" {
 		return Budget{}, ErrEmptyCategory
 	}
-	if math.IsNaN(b.Limit) || math.IsInf(b.Limit, 0) || b.Limit < minAmount {
-		return Budget{}, fmt.Errorf("%w %v for %q: must be a finite number of at least %.2f",
-			ErrInvalidLimit, b.Limit, b.Category, minAmount)
+	if !inAmountRange(b.Limit) {
+		return Budget{}, fmt.Errorf("%w %v for %q: must be from %g to %g",
+			ErrInvalidLimit, b.Limit, b.Category, minAmount, maxAmount)
 	}
+	b.Limit = roundToKopecks(b.Limit)
 	return b, nil
 }
 
@@ -128,7 +137,8 @@ func checkBudget(tx Transaction) error {
 		return nil
 	}
 	spent := spentIn(tx.Category)
-	// Compare whole kopecks, so float rounding (0.1+0.2 != 0.3) does not matter.
+	// Amounts and limits are whole kopecks, so compare kopecks: float sums
+	// like 0.1+0.2 are not exactly 0.3. maxAmount keeps the product finite.
 	if math.Round((spent+tx.Amount)*100) > math.Round(b.Limit*100) {
 		return &BudgetExceededError{Category: tx.Category, Limit: b.Limit, Spent: spent, Amount: tx.Amount}
 	}
