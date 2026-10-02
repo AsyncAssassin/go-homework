@@ -1,0 +1,10 @@
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/
+
+# Go
+/bin/
+*.exe
+*.test
+*.out
