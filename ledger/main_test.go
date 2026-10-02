@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -25,6 +26,33 @@ func TestRemaining(t *testing.T) {
 	}
 }
 
+func TestPrintTransactions(t *testing.T) {
+	resetStorage()
+	// The first and the last half hour of October 2026 in the local time zone,
+	// given in UTC-12 and UTC+14. The table must show the local dates.
+	first := time.Date(2026, time.October, 1, 0, 30, 0, 0, time.Local)
+	last := time.Date(2026, time.October, 31, 23, 30, 0, 0, time.Local)
+	for _, tx := range []Transaction{
+		{Amount: 10, Category: "еда", Description: "завтрак", Date: first.In(time.FixedZone("UTC-12", -12*60*60))},
+		{Amount: 20, Category: "еда", Description: "ужин", Date: last.In(time.FixedZone("UTC+14", 14*60*60))},
+	} {
+		if err := AddTransaction(tx); err != nil {
+			t.Fatalf("AddTransaction() error = %v", err)
+		}
+	}
+
+	var out strings.Builder
+	printTransactions(&out, ListTransactions())
+
+	want := "Transactions (2):\n" +
+		"ID  DATE        CATEGORY  AMOUNT  DESCRIPTION\n" +
+		"1   2026-10-01  еда       10.00   завтрак\n" +
+		"2   2026-10-31  еда       20.00   ужин\n"
+	if got := out.String(); got != want {
+		t.Errorf("printTransactions() wrote:\n%s\nwant:\n%s", got, want)
+	}
+}
+
 func TestPrintBudgets(t *testing.T) {
 	resetStorage()
 	for _, b := range []Budget{
@@ -36,7 +64,7 @@ func TestPrintBudgets(t *testing.T) {
 			t.Fatalf("SetBudget() error = %v", err)
 		}
 	}
-	now := time.Date(2026, time.October, 3, 12, 0, 0, 0, time.UTC)
+	now := time.Date(2026, time.October, 3, 12, 0, 0, 0, time.Local)
 	for _, tx := range []Transaction{
 		{Amount: 1000, Category: "еда", Date: now},
 		{Amount: 700, Category: "еда", Date: now.AddDate(0, -1, 0)},      // previous month
@@ -67,8 +95,15 @@ func TestLoadBudgetsFromFile(t *testing.T) {
 		if err := loadBudgetsFromFile("budgets.json"); err != nil {
 			t.Fatalf("loadBudgetsFromFile() error = %v", err)
 		}
-		if len(ListBudgets()) == 0 {
-			t.Error("no budgets loaded from budgets.json")
+		// The README shows this file and the demo output that depends on it.
+		want := []Budget{
+			{Category: "еда", Limit: 5000, Period: PeriodMonth},
+			{Category: "развлечения", Limit: 30000, Period: PeriodYear},
+			{Category: "ремонт", Limit: 100000},
+			{Category: "транспорт", Limit: 2500, Period: PeriodMonth},
+		}
+		if got := ListBudgets(); !slices.Equal(got, want) {
+			t.Errorf("budgets = %+v, want %+v", got, want)
 		}
 	})
 

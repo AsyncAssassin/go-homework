@@ -39,13 +39,13 @@ func main() {
 		}
 		os.Exit(1)
 	}
-	fmt.Printf("Budgets loaded from %s\n\n", *budgetsPath)
-	printBudgets(os.Stdout, time.Now())
-
-	// The last day of the previous month. Transactions without a date get
-	// the current one.
+	// One clock reading for the whole demo, so a run at midnight cannot split
+	// it between two months.
 	now := time.Now()
-	lastMonth := now.AddDate(0, 0, -now.Day())
+	lastMonth := now.AddDate(0, 0, -now.Day()) // the last day of the previous month
+
+	fmt.Printf("Budgets loaded from %s\n\n", *budgetsPath)
+	printBudgets(os.Stdout, now)
 
 	fmt.Println("\nAdding transactions:")
 	for _, tx := range []Transaction{
@@ -59,6 +59,9 @@ func main() {
 		{Amount: 700, Category: "здоровье", Description: "лекарства"}, // category without a budget
 		{Amount: 0, Category: "еда", Description: "пустой чек"},       // invalid amount
 	} {
+		if tx.Date.IsZero() {
+			tx.Date = now
+		}
 		addAndReport(tx)
 	}
 
@@ -68,7 +71,7 @@ func main() {
 	fmt.Println()
 	printTransactions(os.Stdout, ListTransactions())
 	fmt.Println()
-	printBudgets(os.Stdout, time.Now())
+	printBudgets(os.Stdout, now)
 }
 
 // loadBudgetsFromFile loads budgets from the JSON file at path.
@@ -115,14 +118,15 @@ func showLoadErrors() {
 	fmt.Printf("  missing file: %v\n", loadBudgetsFromFile("no-such-dir/budgets.json"))
 }
 
-// printTransactions writes transactions to w as a table.
+// printTransactions writes transactions to w as a table. Dates are shown in
+// the local time zone, the one budget periods are counted in.
 func printTransactions(w io.Writer, txs []Transaction) {
 	fmt.Fprintf(w, "Transactions (%d):\n", len(txs))
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "ID\tDATE\tCATEGORY\tAMOUNT\tDESCRIPTION")
 	for _, tx := range txs {
 		fmt.Fprintf(tw, "%d\t%s\t%s\t%.2f\t%s\n",
-			tx.ID, tx.Date.Format(time.DateOnly), tx.Category, tx.Amount, tx.Description)
+			tx.ID, tx.Date.In(time.Local).Format(time.DateOnly), tx.Category, tx.Amount, tx.Description)
 	}
 	tw.Flush()
 }

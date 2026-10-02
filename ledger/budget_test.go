@@ -66,13 +66,15 @@ func TestSetBudgetPeriod(t *testing.T) {
 	tests := []struct {
 		name    string
 		period  Period
+		want    Period // period of the stored budget
 		wantErr error
 	}{
-		{name: "no period", period: PeriodNone},
-		{name: "month", period: PeriodMonth},
-		{name: "year", period: PeriodYear},
+		{name: "no period", period: PeriodNone, want: PeriodNone},
+		{name: "month", period: PeriodMonth, want: PeriodMonth},
+		{name: "year", period: PeriodYear, want: PeriodYear},
+		{name: "period is normalized", period: " Month ", want: PeriodMonth},
+		{name: "blank period", period: " ", want: PeriodNone},
 		{name: "unknown period", period: "week", wantErr: ErrInvalidPeriod},
-		{name: "period in another case", period: "Month", wantErr: ErrInvalidPeriod},
 	}
 
 	for _, tt := range tests {
@@ -86,7 +88,7 @@ func TestSetBudgetPeriod(t *testing.T) {
 
 			var want []Budget
 			if tt.wantErr == nil {
-				want = []Budget{{Category: "еда", Limit: 5000, Period: tt.period}}
+				want = []Budget{{Category: "еда", Limit: 5000, Period: tt.want}}
 			}
 			if got := ListBudgets(); !slices.Equal(got, want) {
 				t.Errorf("budgets = %+v, want %+v", got, want)
@@ -96,9 +98,13 @@ func TestSetBudgetPeriod(t *testing.T) {
 }
 
 func TestPeriodLabel(t *testing.T) {
-	// 01:00 on October 1 in UTC+4 is still September 30 in UTC, but the label
-	// follows the location of the date.
-	date := time.Date(2026, time.October, 1, 1, 0, 0, 0, time.FixedZone("UTC+4", 4*60*60))
+	// The first and the last half hour of October 2026 in the local time zone.
+	// Shown in UTC-12 and UTC+14, at least one of them falls on another month,
+	// whatever the local zone is, but the labels must still say October.
+	first := time.Date(2026, time.October, 1, 0, 30, 0, 0, time.Local)
+	last := time.Date(2026, time.October, 31, 23, 30, 0, 0, time.Local)
+	west := time.FixedZone("UTC-12", -12*60*60)
+	east := time.FixedZone("UTC+14", 14*60*60)
 
 	tests := []struct {
 		period Period
@@ -108,9 +114,11 @@ func TestPeriodLabel(t *testing.T) {
 		{period: PeriodMonth, want: "2026-10"},
 		{period: PeriodYear, want: "2026"},
 	}
-	for _, tt := range tests {
-		if got := tt.period.label(date); got != tt.want {
-			t.Errorf("Period(%q).label(%v) = %q, want %q", tt.period, date, got, tt.want)
+	for _, date := range []time.Time{first, first.In(west), last, last.In(east)} {
+		for _, tt := range tests {
+			if got := tt.period.label(date); got != tt.want {
+				t.Errorf("Period(%q).label(%v) = %q, want %q", tt.period, date, got, tt.want)
+			}
 		}
 	}
 }
@@ -166,7 +174,8 @@ func TestAddTransactionBudget(t *testing.T) {
 }
 
 func TestAddTransactionBudgetPeriod(t *testing.T) {
-	oct := time.Date(2026, time.October, 1, 0, 0, 0, 0, time.UTC)
+	// Periods are counted in the local time zone, so the dates are local too.
+	oct := time.Date(2026, time.October, 1, 0, 0, 0, 0, time.Local)
 
 	tests := []struct {
 		name    string
@@ -210,21 +219,21 @@ func TestAddTransactionBudgetZeroDate(t *testing.T) {
 	if err := SetBudget(Budget{Category: "еда", Limit: 1000, Period: PeriodMonth}); err != nil {
 		t.Fatalf("SetBudget() error = %v", err)
 	}
-	// Spending in January of year 1, the month of the zero time.Time.
-	jan1 := time.Date(1, time.January, 1, 0, 0, 1, 0, time.UTC)
-	if err := AddTransaction(Transaction{Amount: 800, Category: "еда", Date: jan1}); err != nil {
+	// Spending a second after the zero time.Time, in the same month as it.
+	early := time.Time{}.Add(time.Second)
+	if err := AddTransaction(Transaction{Amount: 800, Category: "еда", Date: early}); err != nil {
 		t.Fatalf("AddTransaction() error = %v", err)
 	}
 
 	// The zero date becomes the current time before the budget check, so the
-	// spending in January of year 1 does not count.
+	// early spending is in another month and does not count.
 	if err := AddTransaction(Transaction{Amount: 300, Category: "еда"}); err != nil {
 		t.Fatalf("AddTransaction() error = %v, want nil", err)
 	}
 }
 
 func TestBudgetExceededError(t *testing.T) {
-	date := time.Date(2026, time.October, 3, 12, 0, 0, 0, time.UTC)
+	date := time.Date(2026, time.October, 3, 12, 0, 0, 0, time.Local)
 
 	tests := []struct {
 		name    string
@@ -241,13 +250,13 @@ func TestBudgetExceededError(t *testing.T) {
 		{
 			name:    "month",
 			period:  PeriodMonth,
-			want:    BudgetExceededError{Category: "еда", Period: "2026-10", Limit: 1000, Spent: 600, Amount: 500},
+			want:    BudgetExceededError{Category: "еда", PeriodLabel: "2026-10", Limit: 1000, Spent: 600, Amount: 500},
 			wantMsg: `budget exceeded for "еда" in 2026-10: spent 600.00 + new 500.00 > limit 1000.00`,
 		},
 		{
 			name:    "year",
 			period:  PeriodYear,
-			want:    BudgetExceededError{Category: "еда", Period: "2026", Limit: 1000, Spent: 600, Amount: 500},
+			want:    BudgetExceededError{Category: "еда", PeriodLabel: "2026", Limit: 1000, Spent: 600, Amount: 500},
 			wantMsg: `budget exceeded for "еда" in 2026: spent 600.00 + new 500.00 > limit 1000.00`,
 		},
 	}
@@ -290,7 +299,7 @@ func TestLoadBudgets(t *testing.T) {
 	}{
 		{
 			name:  "adds and updates budgets",
-			input: `[{"category": "еда", "limit": 5000, "period": "month"}, {"category": " Транспорт ", "limit": 2000.5}]`,
+			input: `[{"category": "еда", "limit": 5000, "period": "Month"}, {"category": " Транспорт ", "limit": 2000.5}]`,
 			want: []Budget{
 				{Category: "еда", Limit: 5000, Period: PeriodMonth},
 				{Category: "транспорт", Limit: 2000.5},
