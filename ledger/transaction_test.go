@@ -7,9 +7,10 @@ import (
 	"time"
 )
 
-// resetStorage empties the package-level storage before a test.
+// resetStorage empties the package-level storages before a test.
 func resetStorage() {
 	transactions = []Transaction{}
+	budgets = map[string]Budget{}
 }
 
 func TestAddTransaction(t *testing.T) {

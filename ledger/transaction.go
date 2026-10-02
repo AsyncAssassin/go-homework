@@ -33,7 +33,8 @@ var transactions = []Transaction{}
 
 // AddTransaction validates tx, assigns it the next ID and stores it.
 // Category and description are trimmed, and a zero date is replaced with
-// the current time.
+// the current time. If the category has a budget and tx does not fit into
+// it, AddTransaction returns a *BudgetExceededError and stores nothing.
 func AddTransaction(tx Transaction) error {
 	if math.IsNaN(tx.Amount) || math.IsInf(tx.Amount, 0) || tx.Amount < minAmount {
 		return fmt.Errorf("%w %v: must be a finite number of at least %.2f", ErrInvalidAmount, tx.Amount, minAmount)
@@ -43,6 +44,9 @@ func AddTransaction(tx Transaction) error {
 		return ErrEmptyCategory
 	}
 	tx.Description = strings.TrimSpace(tx.Description)
+	if err := checkBudget(tx); err != nil {
+		return err
+	}
 
 	tx.ID = len(transactions) + 1
 	if tx.Date.IsZero() {
