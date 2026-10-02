@@ -1,0 +1,5 @@
+[
+  {"category": "еда", "limit": 5000},
+  {"category": "транспорт", "limit": 2500},
+  {"category": "развлечения", "limit": 3000}
+]
