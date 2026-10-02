@@ -9,3 +9,5 @@
 *.test
 *.out
 /hw1/hw1
+/gateway/gateway
+/ledger/ledger
