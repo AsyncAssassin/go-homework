@@ -107,6 +107,17 @@ func TestLoadBudgetsFromFile(t *testing.T) {
 		}
 	})
 
+	t.Run("broken JSON", func(t *testing.T) {
+		resetStorage()
+		path := filepath.Join(t.TempDir(), "budgets.json")
+		if err := os.WriteFile(path, []byte(`[{"category": "еда", "limit": 1`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := loadBudgetsFromFile(path); err == nil {
+			t.Fatal("loadBudgetsFromFile() error = nil, want a decode error")
+		}
+	})
+
 	t.Run("null instead of an array", func(t *testing.T) {
 		resetStorage()
 		path := filepath.Join(t.TempDir(), "budgets.json")
@@ -123,6 +134,63 @@ func TestLoadBudgetsFromFile(t *testing.T) {
 		err := loadBudgetsFromFile(filepath.Join(t.TempDir(), "missing.json"))
 		if !errors.Is(err, fs.ErrNotExist) {
 			t.Fatalf("loadBudgetsFromFile() error = %v, want %v", err, fs.ErrNotExist)
+		}
+	})
+}
+
+func TestLoadBudgetsIfExists(t *testing.T) {
+	// Every case starts with this budget; it must survive a missing file.
+	initial := Budget{Category: "еда", Limit: 100}
+
+	tests := []struct {
+		name       string
+		content    string // written to the file; "" means no file at all
+		wantLoaded bool
+		wantErr    bool
+		want       []Budget // budgets after the call
+	}{
+		{
+			name:       "file exists",
+			content:    `[{"category": "еда", "limit": 5000, "period": "month"}]`,
+			wantLoaded: true,
+			want:       []Budget{{Category: "еда", Limit: 5000, Period: PeriodMonth}},
+		},
+		{name: "file is missing", want: []Budget{initial}},
+		{name: "file is broken", content: `[{"category": "еда"`, wantErr: true, want: []Budget{initial}},
+		{name: "file is empty", content: "", wantErr: true, want: []Budget{initial}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resetStorage()
+			if err := SetBudget(initial); err != nil {
+				t.Fatalf("SetBudget() error = %v", err)
+			}
+			path := filepath.Join(t.TempDir(), "budgets.json")
+			if tt.name != "file is missing" {
+				if err := os.WriteFile(path, []byte(tt.content), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			loaded, err := loadBudgetsIfExists(path)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("loadBudgetsIfExists() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if loaded != tt.wantLoaded {
+				t.Errorf("loadBudgetsIfExists() loaded = %v, want %v", loaded, tt.wantLoaded)
+			}
+			if got := ListBudgets(); !slices.Equal(got, tt.want) {
+				t.Errorf("budgets = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+
+	t.Run("directory instead of a file", func(t *testing.T) {
+		resetStorage()
+		loaded, err := loadBudgetsIfExists(t.TempDir())
+		if err == nil || loaded {
+			t.Fatalf("loadBudgetsIfExists() = %v, %v; want false and an error", loaded, err)
 		}
 	})
 }

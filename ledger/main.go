@@ -32,19 +32,22 @@ func main() {
 			os.Exit(1)
 		}
 	}
-	if err := loadBudgetsFromFile(*budgetsPath); err != nil {
+	loaded, err := loadBudgetsIfExists(*budgetsPath)
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "Cannot load budgets:", err)
-		if errors.Is(err, fs.ErrNotExist) {
-			fmt.Fprintln(os.Stderr, "Run the service from the ledger directory or pass -budgets <path>.")
-		}
 		os.Exit(1)
+	}
+	if loaded {
+		fmt.Printf("Budgets loaded from %s\n", *budgetsPath)
+	} else {
+		fmt.Fprintf(os.Stderr, "Budgets file %s not found, using the built-in budgets (pass -budgets <path> to load a file)\n", *budgetsPath)
 	}
 	// One clock reading for the whole demo, so a run at midnight cannot split
 	// it between two months.
 	now := time.Now()
 	lastMonth := now.AddDate(0, 0, -now.Day()) // the last day of the previous month
 
-	fmt.Printf("Budgets loaded from %s\n\n", *budgetsPath)
+	fmt.Println()
 	printBudgets(os.Stdout, now)
 
 	fmt.Println("\nAdding transactions:")
@@ -69,6 +72,18 @@ func main() {
 	printTransactions(os.Stdout, ListTransactions())
 	fmt.Println()
 	printBudgets(os.Stdout, now)
+}
+
+// loadBudgetsIfExists loads budgets from the JSON file at path and reports
+// whether it did. The file is optional: when it does not exist, the budgets
+// set in code stay in effect and no error is returned. A file that exists
+// but cannot be read or parsed is an error.
+func loadBudgetsIfExists(path string) (bool, error) {
+	err := loadBudgetsFromFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 // loadBudgetsFromFile loads budgets from the JSON file at path.
