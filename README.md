@@ -5,6 +5,7 @@
 | 1 | Введение в Go | `hw1/` |
 | 2 | Функции: сервисы Gateway и Ledger | `gateway/`, `ledger/` |
 | 3 | Ввод-вывод, обработка ошибок: бюджеты в Ledger | `ledger/` |
+| 4 | ООП: валидация через интерфейс в Ledger | `ledger/` |
 
 Состояние репозитория на момент сдачи каждого ДЗ отмечено тегом `hwN`.
 
@@ -152,6 +153,46 @@ CATEGORY     PERIOD    LIMIT      SPENT    LEFT
 ```
 
 Отклонённые транзакции («ресторан», «пустой чек») в список не попали. «Ресторан в прошлом месяце» добавлен, хотя лимит на еду в текущем месяце исчерпан: у прошлого месяца свой лимит. После неудачных загрузок бюджеты не изменились («кафе» и «такси» не появились). Даты и периоды в выводе зависят от дня запуска.
+
+## ДЗ 4. ООП: валидация через интерфейс в Ledger
+
+```sh
+cd ledger
+go run .
+```
+
+Проверка данных отделена от бизнес-логики интерфейсом `Validatable` (`ledger/validate.go`):
+
+```go
+type Validatable interface {
+	Validate() error
+}
+```
+
+### Что реализовано
+
+- `Transaction.Validate()`: сумма от 0.01 до 10¹² (ноль, отрицательные суммы, NaN и бесконечность не проходят), категория не пустая, год заданной даты от 1 до 9999. Пустая дата допустима: при добавлении подставляется текущая.
+- `Budget.Validate()`: категория не пустая, лимит от 0.01 до 10¹², период `month`, `year` или пусто.
+- `Validate()` только возвращает ошибку и ничего не логирует, результат печатает вызывающий код.
+- `AddTransaction`, `SetBudget` и `LoadBudgets` вызывают `Validate()` до сохранения. Если он вернул ошибку, объект не добавляется, а ошибка возвращается вызывающему коду. Проверки бюджетов из ДЗ 3 работают как раньше.
+- `CheckValid(v Validatable) error` вызывает `v.Validate()` и одинаково работает с транзакциями, бюджетами и указателями на них. Для `nil` возвращает ошибку `nothing to validate`.
+
+### Пример вывода
+
+Вывод из ДЗ 3 не изменился, в конец добавлен раздел, где `CheckValid` проверяет разные типы через интерфейс. Первый столбец (`%T`) показывает, какой тип лежит в интерфейсе:
+
+```text
+Validation through the Validatable interface:
+  main.Transaction  450.00 "ланч" (еда)               ok
+  main.Transaction  -100.00 "возврат" (еда)           invalid: invalid amount -100: must be from 0.01 to 1e+12
+  main.Transaction  300.00 "такси" (no category)      invalid: category must not be empty
+  main.Transaction  50.00 "кофе" (еда) in the year 0  invalid: invalid date 0000-03-01: the year must be from 1 to 9999
+  main.Budget       кафе 3000.00 a month              ok
+  main.Budget       кафе 0.00                         invalid: invalid limit 0 for "кафе": must be from 0.01 to 1e+12
+  main.Budget       no category 1000.00               invalid: category must not be empty
+```
+
+Табличные тесты `Validate()` и `CheckValid` находятся в `ledger/ledger_test.go`.
 
 ## Тесты
 
