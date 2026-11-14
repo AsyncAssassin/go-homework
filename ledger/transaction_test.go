@@ -2,7 +2,6 @@ package main
 
 import (
 	"errors"
-	"math"
 	"testing"
 	"time"
 )
@@ -13,6 +12,8 @@ func resetStorage() {
 	budgets = map[string]Budget{}
 }
 
+// TestAddTransaction checks that a transaction rejected by Validate is not
+// stored. The validation rules are tested in TestTransactionValidate.
 func TestAddTransaction(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -20,13 +21,7 @@ func TestAddTransaction(t *testing.T) {
 		wantErr error
 	}{
 		{name: "valid", tx: Transaction{Amount: 100, Category: "еда"}},
-		{name: "one kopeck", tx: Transaction{Amount: 0.01, Category: "еда"}},
-		{name: "zero amount", tx: Transaction{Amount: 0, Category: "еда"}, wantErr: ErrInvalidAmount},
-		{name: "less than a kopeck", tx: Transaction{Amount: 0.001, Category: "еда"}, wantErr: ErrInvalidAmount},
-		{name: "negative amount", tx: Transaction{Amount: -50, Category: "еда"}, wantErr: ErrInvalidAmount},
-		{name: "NaN amount", tx: Transaction{Amount: math.NaN(), Category: "еда"}, wantErr: ErrInvalidAmount},
-		{name: "infinite amount", tx: Transaction{Amount: math.Inf(1), Category: "еда"}, wantErr: ErrInvalidAmount},
-		{name: "too large amount", tx: Transaction{Amount: 2e12, Category: "еда"}, wantErr: ErrInvalidAmount},
+		{name: "invalid amount", tx: Transaction{Amount: -50, Category: "еда"}, wantErr: ErrInvalidAmount},
 		{name: "blank category", tx: Transaction{Amount: 100, Category: "  "}, wantErr: ErrEmptyCategory},
 		{
 			name:    "year out of range",

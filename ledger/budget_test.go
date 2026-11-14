@@ -3,7 +3,6 @@ package main
 import (
 	"errors"
 	"io"
-	"math"
 	"slices"
 	"strings"
 	"testing"
@@ -11,6 +10,8 @@ import (
 	"time"
 )
 
+// TestSetBudget checks how a budget is stored and that a budget rejected by
+// Validate is not. The validation rules are tested in TestBudgetValidate.
 func TestSetBudget(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -21,11 +22,7 @@ func TestSetBudget(t *testing.T) {
 		{name: "category is normalized", budget: Budget{Category: " Еда ", Limit: 5000}},
 		{name: "limit is rounded to kopecks", budget: Budget{Category: "еда", Limit: 5000.001}},
 		{name: "blank category", budget: Budget{Category: " ", Limit: 5000}, wantErr: ErrEmptyCategory},
-		{name: "zero limit", budget: Budget{Category: "еда", Limit: 0}, wantErr: ErrInvalidLimit},
-		{name: "negative limit", budget: Budget{Category: "еда", Limit: -1}, wantErr: ErrInvalidLimit},
-		{name: "NaN limit", budget: Budget{Category: "еда", Limit: math.NaN()}, wantErr: ErrInvalidLimit},
-		{name: "infinite limit", budget: Budget{Category: "еда", Limit: math.Inf(1)}, wantErr: ErrInvalidLimit},
-		{name: "too large limit", budget: Budget{Category: "еда", Limit: 2e12}, wantErr: ErrInvalidLimit},
+		{name: "invalid limit", budget: Budget{Category: "еда", Limit: -1}, wantErr: ErrInvalidLimit},
 	}
 
 	for _, tt := range tests {
@@ -216,20 +213,20 @@ func TestAddTransactionBudgetPeriod(t *testing.T) {
 
 func TestAddTransactionBudgetZeroDate(t *testing.T) {
 	resetStorage()
-	// A yearly budget, so the test fails only if it runs across New Year.
-	if err := SetBudget(Budget{Category: "еда", Limit: 1000, Period: PeriodYear}); err != nil {
+	if err := SetBudget(Budget{Category: "еда", Limit: 1000, Period: PeriodMonth}); err != nil {
 		t.Fatalf("SetBudget() error = %v", err)
 	}
-	if err := AddTransaction(Transaction{Amount: 800, Category: "еда", Date: time.Now()}); err != nil {
+	// Spending a second after the zero time.Time: in every time zone it falls
+	// into the same month as a zero date would.
+	early := time.Time{}.Add(time.Second)
+	if err := AddTransaction(Transaction{Amount: 800, Category: "еда", Date: early}); err != nil {
 		t.Fatalf("AddTransaction() error = %v", err)
 	}
 
 	// The zero date becomes the current time before the budget check, so the
-	// spending of this year counts. Checked with the zero date itself, the
-	// transaction would fall into the year 1 and fit into its empty budget.
-	err := AddTransaction(Transaction{Amount: 300, Category: "еда"})
-	if !errors.Is(err, ErrBudgetExceeded) {
-		t.Fatalf("AddTransaction() error = %v, want %v", err, ErrBudgetExceeded)
+	// early spending is in another month and does not count.
+	if err := AddTransaction(Transaction{Amount: 300, Category: "еда"}); err != nil {
+		t.Fatalf("AddTransaction() error = %v, want nil", err)
 	}
 }
 

@@ -41,6 +41,12 @@ func TestTransactionValidate(t *testing.T) {
 			wantErr: ErrInvalidDate,
 		},
 		{
+			// The year is taken in the zone of the date, so the result does
+			// not depend on the time zone of the machine.
+			name: "first hour of the year 1 in UTC",
+			tx:   Transaction{Amount: 450, Category: "еда", Date: time.Date(1, time.January, 1, 1, 0, 0, 0, time.UTC)},
+		},
+		{
 			name:    "the amount is checked first",
 			tx:      Transaction{Amount: 0, Category: " "},
 			wantErr: ErrInvalidAmount,
@@ -109,6 +115,8 @@ func TestCheckValid(t *testing.T) {
 		{name: "invalid budget", v: Budget{Category: "еда"}, wantErr: ErrInvalidLimit},
 		{name: "pointer to a budget", v: &Budget{Category: "еда", Limit: 5000, Period: PeriodYear}},
 		{name: "nil", v: nil, wantErr: ErrNothingToValidate},
+		{name: "nil pointer to a transaction", v: (*Transaction)(nil), wantErr: ErrNothingToValidate},
+		{name: "nil pointer to a budget", v: (*Budget)(nil), wantErr: ErrNothingToValidate},
 	}
 
 	for _, tt := range tests {

@@ -133,9 +133,9 @@ func ListBudgets() []Budget {
 }
 
 // LoadBudgets reads a JSON array of budgets from r, for example
-// [{"category": "еда", "limit": 5000, "period": "month"}], and sets each of
-// them with SetBudget. The period is optional. Nothing is changed unless the
-// whole input is valid.
+// [{"category": "еда", "limit": 5000, "period": "month"}], checks each of
+// them with Validate and sets them as SetBudget does. The period is optional.
+// Nothing is changed unless the whole input is valid.
 func LoadBudgets(r io.Reader) error {
 	dec := json.NewDecoder(r)
 	dec.DisallowUnknownFields()
@@ -165,17 +165,16 @@ func LoadBudgets(r io.Reader) error {
 		if err := b.Validate(); err != nil {
 			return fmt.Errorf("load budgets: budget #%d: %w", i+1, err)
 		}
-		category := normalizeCategory(b.Category)
-		if seen[category] {
-			return fmt.Errorf("load budgets: budget #%d: duplicate category %q", i+1, category)
+		b = normalizeBudget(b)
+		if seen[b.Category] {
+			return fmt.Errorf("load budgets: budget #%d: duplicate category %q", i+1, b.Category)
 		}
-		seen[category] = true
+		seen[b.Category] = true
+		list[i] = b
 	}
 
 	for _, b := range list {
-		if err := SetBudget(b); err != nil {
-			return fmt.Errorf("load budgets: %w", err)
-		}
+		budgets[b.Category] = b
 	}
 	return nil
 }

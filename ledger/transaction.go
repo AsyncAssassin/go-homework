@@ -24,8 +24,8 @@ const (
 	maxAmount = 1e12
 )
 
-// Accepted years of transaction dates in the local time zone: the dates
-// that can be written as YYYY-MM-DD with a year of at least 1.
+// Accepted years of transaction dates: the dates that can be written as
+// YYYY-MM-DD with a year of at least 1.
 const (
 	minYear = 1
 	maxYear = 9999
@@ -44,8 +44,8 @@ var transactions = []Transaction{}
 
 // Validate reports whether tx can be stored. The amount must be from 0.01
 // to 1e12, the category must not be blank, and the year of a set date must
-// be from 1 to 9999 in the local time zone. A zero date is valid:
-// AddTransaction replaces it with the current time.
+// be from 1 to 9999 in the time zone the date is given in. A zero date means
+// "no date" and is valid: AddTransaction replaces it with the current time.
 func (tx Transaction) Validate() error {
 	if !inAmountRange(tx.Amount) {
 		return fmt.Errorf("%w %v: must be from %g to %g", ErrInvalidAmount, tx.Amount, minAmount, maxAmount)
@@ -54,10 +54,9 @@ func (tx Transaction) Validate() error {
 		return ErrEmptyCategory
 	}
 	if !tx.Date.IsZero() {
-		date := tx.Date.In(time.Local)
-		if year := date.Year(); year < minYear || year > maxYear {
+		if year := tx.Date.Year(); year < minYear || year > maxYear {
 			return fmt.Errorf("%w %s: the year must be from %d to %d",
-				ErrInvalidDate, date.Format(time.DateOnly), minYear, maxYear)
+				ErrInvalidDate, tx.Date.Format(time.DateOnly), minYear, maxYear)
 		}
 	}
 	return nil

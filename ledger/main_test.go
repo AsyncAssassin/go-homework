@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -93,23 +94,26 @@ func TestShowValidation(t *testing.T) {
 	var out strings.Builder
 	showValidation(&out)
 
-	// Each line shows the type the interface held and the result of CheckValid.
-	want := []struct{ typ, result string }{
-		{typ: "main.Transaction", result: "ok"},
-		{typ: "main.Transaction", result: "invalid: invalid amount -100: must be from 0.01 to 1e+12"},
-		{typ: "main.Transaction", result: "invalid: category must not be empty"},
-		{typ: "main.Transaction", result: "invalid: invalid date 0000-03-01: the year must be from 1 to 9999"},
-		{typ: "main.Budget", result: "ok"},
-		{typ: "main.Budget", result: `invalid: invalid limit 0 for "кафе": must be from 0.01 to 1e+12`},
-		{typ: "main.Budget", result: "invalid: category must not be empty"},
+	// Each line shows the type the interface held, the value and the result
+	// of CheckValid; the columns are separated by two or more spaces.
+	want := [][3]string{
+		{"main.Transaction", `450.00 "ланч" (еда)`, "ok"},
+		{"main.Transaction", `-100.00 "возврат" (еда)`, "invalid: invalid amount -100: must be from 0.01 to 1e+12"},
+		{"main.Transaction", `300.00 "такси" (no category)`, "invalid: category must not be empty"},
+		{"main.Transaction", `50.00 "кофе" (еда) on 0000-03-01`, "invalid: invalid date 0000-03-01: the year must be from 1 to 9999"},
+		{"main.Budget", "кафе 3000.00 a month", "ok"},
+		{"main.Budget", "кафе 0.00", `invalid: invalid limit 0 for "кафе": must be from 0.01 to 1e+12`},
+		{"main.Budget", "no category 1000.00", "invalid: category must not be empty"},
 	}
+	columns := regexp.MustCompile(` {2,}`)
 	lines := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
 	if len(lines) != len(want) {
 		t.Fatalf("showValidation() wrote %d lines, want %d:\n%s", len(lines), len(want), out.String())
 	}
 	for i, w := range want {
-		if !strings.HasPrefix(lines[i], "  "+w.typ+" ") || !strings.HasSuffix(lines[i], "  "+w.result) {
-			t.Errorf("line %d = %q, want type %q and result %q", i+1, lines[i], w.typ, w.result)
+		got := columns.Split(strings.TrimPrefix(lines[i], "  "), -1)
+		if len(got) != 3 || [3]string(got) != w {
+			t.Errorf("line %d = %q, want columns %q", i+1, lines[i], w)
 		}
 	}
 }
