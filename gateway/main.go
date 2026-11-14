@@ -1,14 +1,16 @@
-// Command gateway is the HTTP gateway of the project. For now it only
-// exposes a health check: GET /ping answers "pong".
+// Command gateway is the HTTP gateway of the project. It answers GET /ping
+// and serves the REST API of the ledger under /api. Transactions and
+// budgets are kept in memory and are lost when the gateway stops.
 package main
 
 import (
 	"flag"
-	"io"
 	"log"
 	"net"
 	"net/http"
 	"time"
+
+	"github.com/AsyncAssassin/go-homework/gateway/internal/api"
 )
 
 func main() {
@@ -22,7 +24,7 @@ func main() {
 	}
 
 	srv := &http.Server{
-		Handler:           newRouter(),
+		Handler:           api.NewRouter(),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,
@@ -33,18 +35,4 @@ func main() {
 	if err := srv.Serve(ln); err != nil {
 		log.Fatalf("Gateway service stopped: %v", err)
 	}
-}
-
-// newRouter registers the gateway's HTTP handlers.
-func newRouter() http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /ping", handlePing)
-	return mux
-}
-
-// handlePing answers "pong" so clients can check that the gateway is up.
-func handlePing(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	_, _ = io.WriteString(w, "pong")
 }

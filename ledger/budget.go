@@ -1,4 +1,4 @@
-package main
+package ledger
 
 import (
 	"encoding/json"
@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"slices"
 	"strings"
 	"time"
 )
@@ -83,10 +82,6 @@ func (e *BudgetExceededError) Is(target error) bool {
 	return target == ErrBudgetExceeded
 }
 
-// budgets is the in-memory budget storage keyed by category. It starts empty
-// and is not safe for concurrent use.
-var budgets = map[string]Budget{}
-
 // Validate reports whether b can be stored. The category must not be blank,
 // the limit must be from 0.01 to 1e12, and the period must be "month",
 // "year" or empty. Case and surrounding spaces of the category and the
@@ -108,34 +103,42 @@ func (b Budget) Validate() error {
 	return nil
 }
 
-// SetBudget checks b with Validate and adds a budget for b.Category or
-// replaces the existing one as a whole, period included: a budget without
-// a period replaces a monthly one with a limit for all time.
-func SetBudget(b Budget) error {
+// SetBudget checks b with Validate, adds a budget for b.Category or replaces
+// the existing one as a whole, period included, and returns the stored
+// budget. A budget without a period replaces a monthly one with a limit for
+// all time. The category and the period are stored trimmed and lowercased,
+// the limit is rounded to kopecks. It is safe for concurrent use.
+func SetBudget(b Budget) (Budget, error) {
 	if err := b.Validate(); err != nil {
-		return err
+		return Budget{}, err
 	}
 	b = normalizeBudget(b)
-	budgets[b.Category] = b
-	return nil
+	store.setBudgets(b)
+	return b, nil
 }
 
 // ListBudgets returns all budgets sorted by category.
 func ListBudgets() []Budget {
-	list := make([]Budget, 0, len(budgets))
-	for _, b := range budgets {
-		list = append(list, b)
-	}
-	slices.SortFunc(list, func(a, b Budget) int {
-		return strings.Compare(a.Category, b.Category)
-	})
-	return list
+	return store.listBudgets()
+}
+
+// BudgetUsage is a budget with the amount spent within one of its periods.
+type BudgetUsage struct {
+	Budget      Budget
+	PeriodLabel string  // such as "2026-10" for a monthly budget; "" if the budget has no period
+	Spent       float64 // amount spent in the category within the period
+}
+
+// ListBudgetUsage returns every budget, sorted by category, with the amount
+// spent within its period that contains date.
+func ListBudgetUsage(date time.Time) []BudgetUsage {
+	return store.budgetUsage(date)
 }
 
 // LoadBudgets reads a JSON array of budgets from r, for example
 // [{"category": "еда", "limit": 5000, "period": "month"}], checks each of
-// them with Validate and sets them as SetBudget does. The period is optional.
-// Nothing is changed unless the whole input is valid.
+// them with Validate and sets them as SetBudget does, all at once. The period
+// is optional. Nothing is changed unless the whole input is valid.
 func LoadBudgets(r io.Reader) error {
 	dec := json.NewDecoder(r)
 	dec.DisallowUnknownFields()
@@ -173,9 +176,7 @@ func LoadBudgets(r io.Reader) error {
 		list[i] = b
 	}
 
-	for _, b := range list {
-		budgets[b.Category] = b
-	}
+	store.setBudgets(list...)
 	return nil
 }
 
@@ -194,15 +195,10 @@ func normalizePeriod(p Period) Period {
 	return Period(strings.ToLower(strings.TrimSpace(string(p))))
 }
 
-// checkBudget returns a *BudgetExceededError if tx does not fit into the
-// budget of its category within the period that contains tx.Date.
-// Categories without a budget are not limited.
-func checkBudget(tx Transaction) error {
-	b, ok := budgets[tx.Category]
-	if !ok {
-		return nil
-	}
-	spent := spentIn(tx.Category, b.Period, tx.Date)
+// checkBudget returns a *BudgetExceededError if tx does not fit into
+// budget b of its category, given the amount already spent within the period
+// of b that contains tx.Date.
+func checkBudget(b Budget, spent float64, tx Transaction) error {
 	// Amounts and limits are whole kopecks, so compare kopecks: float sums
 	// like 0.1+0.2 are not exactly 0.3. maxAmount keeps the product finite.
 	if math.Round((spent+tx.Amount)*100) > math.Round(b.Limit*100) {
@@ -217,13 +213,13 @@ func checkBudget(tx Transaction) error {
 	return nil
 }
 
-// spentIn returns the total amount of the stored transactions in category
-// that fall into the same period of p as date.
-func spentIn(category string, p Period, date time.Time) float64 {
-	period := p.label(date)
+// spentIn returns the total amount of the transactions in txs that have
+// the category of b and fall into the period of b that contains date.
+func spentIn(txs []Transaction, b Budget, date time.Time) float64 {
+	period := b.Period.label(date)
 	var total float64
-	for _, tx := range transactions {
-		if tx.Category == category && p.label(tx.Date) == period {
+	for _, tx := range txs {
+		if tx.Category == b.Category && b.Period.label(tx.Date) == period {
 			total += tx.Amount
 		}
 	}

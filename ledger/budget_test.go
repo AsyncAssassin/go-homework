@@ -1,4 +1,4 @@
-package main
+package ledger
 
 import (
 	"errors"
@@ -27,9 +27,9 @@ func TestSetBudget(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			resetStorage()
+			Reset()
 
-			err := SetBudget(tt.budget)
+			got, err := SetBudget(tt.budget)
 			if !errors.Is(err, tt.wantErr) {
 				t.Fatalf("SetBudget() error = %v, want %v", err, tt.wantErr)
 			}
@@ -37,18 +37,21 @@ func TestSetBudget(t *testing.T) {
 			var want []Budget
 			if tt.wantErr == nil {
 				want = []Budget{{Category: "еда", Limit: 5000}}
+				if got != want[0] {
+					t.Errorf("SetBudget() = %+v, want the stored budget %+v", got, want[0])
+				}
 			}
-			if got := ListBudgets(); !slices.Equal(got, want) {
-				t.Errorf("budgets = %+v, want %+v", got, want)
+			if stored := ListBudgets(); !slices.Equal(stored, want) {
+				t.Errorf("budgets = %+v, want %+v", stored, want)
 			}
 		})
 	}
 }
 
 func TestSetBudgetUpdatesLimit(t *testing.T) {
-	resetStorage()
+	Reset()
 	for _, limit := range []float64{5000, 7000} {
-		if err := SetBudget(Budget{Category: "еда", Limit: limit}); err != nil {
+		if _, err := SetBudget(Budget{Category: "еда", Limit: limit}); err != nil {
 			t.Fatalf("SetBudget() error = %v", err)
 		}
 	}
@@ -76,9 +79,9 @@ func TestSetBudgetPeriod(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			resetStorage()
+			Reset()
 
-			err := SetBudget(Budget{Category: "еда", Limit: 5000, Period: tt.period})
+			_, err := SetBudget(Budget{Category: "еда", Limit: 5000, Period: tt.period})
 			if !errors.Is(err, tt.wantErr) {
 				t.Fatalf("SetBudget() error = %v, want %v", err, tt.wantErr)
 			}
@@ -120,6 +123,41 @@ func TestPeriodLabel(t *testing.T) {
 	}
 }
 
+func TestListBudgetUsage(t *testing.T) {
+	Reset()
+	for _, b := range []Budget{
+		{Category: "ремонт", Limit: 100000},
+		{Category: "еда", Limit: 5000, Period: PeriodMonth},
+		{Category: "отпуск", Limit: 90000, Period: PeriodYear},
+	} {
+		if _, err := SetBudget(b); err != nil {
+			t.Fatalf("SetBudget() error = %v", err)
+		}
+	}
+	date := time.Date(2026, time.October, 3, 12, 0, 0, 0, time.Local)
+	for _, tx := range []Transaction{
+		{Amount: 1000, Category: "еда", Date: date},
+		{Amount: 700, Category: "еда", Date: date.AddDate(0, -1, 0)},      // previous month
+		{Amount: 30000, Category: "отпуск", Date: date.AddDate(0, -3, 0)}, // same year
+		{Amount: 20000, Category: "ремонт", Date: date.AddDate(-1, 0, 0)}, // a year ago
+		{Amount: 500, Category: "такси", Date: date},                      // no budget
+	} {
+		if _, err := AddTransaction(tx); err != nil {
+			t.Fatalf("AddTransaction() error = %v", err)
+		}
+	}
+
+	// Sorted by category, each with the spending of its period that contains date.
+	want := []BudgetUsage{
+		{Budget: Budget{Category: "еда", Limit: 5000, Period: PeriodMonth}, PeriodLabel: "2026-10", Spent: 1000},
+		{Budget: Budget{Category: "отпуск", Limit: 90000, Period: PeriodYear}, PeriodLabel: "2026", Spent: 30000},
+		{Budget: Budget{Category: "ремонт", Limit: 100000}, Spent: 20000},
+	}
+	if got := ListBudgetUsage(date); !slices.Equal(got, want) {
+		t.Errorf("ListBudgetUsage() = %+v, want %+v", got, want)
+	}
+}
+
 func TestAddTransactionBudget(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -142,17 +180,17 @@ func TestAddTransactionBudget(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			resetStorage()
-			if err := SetBudget(Budget{Category: "еда", Limit: tt.limit}); err != nil {
+			Reset()
+			if _, err := SetBudget(Budget{Category: "еда", Limit: tt.limit}); err != nil {
 				t.Fatalf("SetBudget() error = %v", err)
 			}
 			for _, amount := range tt.spent {
-				if err := AddTransaction(Transaction{Amount: amount, Category: "еда"}); err != nil {
+				if _, err := AddTransaction(Transaction{Amount: amount, Category: "еда"}); err != nil {
 					t.Fatalf("AddTransaction(%v) error = %v", amount, err)
 				}
 			}
 
-			err := AddTransaction(Transaction{Amount: tt.amount, Category: tt.category})
+			_, err := AddTransaction(Transaction{Amount: tt.amount, Category: tt.category})
 
 			wantStored := len(tt.spent) + 1
 			if tt.wantErr {
@@ -191,15 +229,15 @@ func TestAddTransactionBudgetPeriod(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			resetStorage()
-			if err := SetBudget(Budget{Category: "еда", Limit: 1000, Period: tt.period}); err != nil {
+			Reset()
+			if _, err := SetBudget(Budget{Category: "еда", Limit: 1000, Period: tt.period}); err != nil {
 				t.Fatalf("SetBudget() error = %v", err)
 			}
-			if err := AddTransaction(Transaction{Amount: 800, Category: "еда", Date: tt.spentAt}); err != nil {
+			if _, err := AddTransaction(Transaction{Amount: 800, Category: "еда", Date: tt.spentAt}); err != nil {
 				t.Fatalf("AddTransaction() error = %v", err)
 			}
 
-			err := AddTransaction(Transaction{Amount: 300, Category: "еда", Date: tt.date})
+			_, err := AddTransaction(Transaction{Amount: 300, Category: "еда", Date: tt.date})
 			if tt.wantErr {
 				if !errors.Is(err, ErrBudgetExceeded) {
 					t.Errorf("AddTransaction() error = %v, want %v", err, ErrBudgetExceeded)
@@ -212,17 +250,17 @@ func TestAddTransactionBudgetPeriod(t *testing.T) {
 }
 
 func TestAddTransactionBudgetZeroDate(t *testing.T) {
-	resetStorage()
-	if err := SetBudget(Budget{Category: "еда", Limit: 1000, Period: PeriodMonth}); err != nil {
+	Reset()
+	if _, err := SetBudget(Budget{Category: "еда", Limit: 1000, Period: PeriodMonth}); err != nil {
 		t.Fatalf("SetBudget() error = %v", err)
 	}
 	// Spending at the zero time, stored directly because AddTransaction would
 	// date it now. In every time zone it is in the same month as a zero date.
-	transactions = append(transactions, Transaction{ID: 1, Amount: 800, Category: "еда"})
+	store.transactions = append(store.transactions, Transaction{ID: 1, Amount: 800, Category: "еда"})
 
 	// The zero date becomes the current time before the budget check, so the
 	// spending at the zero time is in another month and does not count.
-	if err := AddTransaction(Transaction{Amount: 300, Category: "еда"}); err != nil {
+	if _, err := AddTransaction(Transaction{Amount: 300, Category: "еда"}); err != nil {
 		t.Fatalf("AddTransaction() error = %v, want nil", err)
 	}
 }
@@ -258,15 +296,15 @@ func TestBudgetExceededError(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			resetStorage()
-			if err := SetBudget(Budget{Category: "еда", Limit: 1000, Period: tt.period}); err != nil {
+			Reset()
+			if _, err := SetBudget(Budget{Category: "еда", Limit: 1000, Period: tt.period}); err != nil {
 				t.Fatalf("SetBudget() error = %v", err)
 			}
-			if err := AddTransaction(Transaction{Amount: 600, Category: "еда", Date: date}); err != nil {
+			if _, err := AddTransaction(Transaction{Amount: 600, Category: "еда", Date: date}); err != nil {
 				t.Fatalf("AddTransaction() error = %v", err)
 			}
 
-			err := AddTransaction(Transaction{Amount: 500, Category: "еда", Date: date})
+			_, err := AddTransaction(Transaction{Amount: 500, Category: "еда", Date: date})
 
 			var budgetErr *BudgetExceededError
 			if !errors.As(err, &budgetErr) {
@@ -329,8 +367,8 @@ func TestLoadBudgets(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			resetStorage()
-			if err := SetBudget(initial[0]); err != nil {
+			Reset()
+			if _, err := SetBudget(initial[0]); err != nil {
 				t.Fatalf("SetBudget() error = %v", err)
 			}
 
@@ -367,7 +405,7 @@ func TestLoadBudgetsReadError(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			resetStorage()
+			Reset()
 
 			err := LoadBudgets(tt.r)
 			if !errors.Is(err, readErr) {

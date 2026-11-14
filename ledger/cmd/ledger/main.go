@@ -1,4 +1,4 @@
-// Command ledger is the business-logic service of the project. It keeps
+// Command ledger is the console demo of the ledger package. It keeps
 // transactions and category budgets in memory and shows how budgets limit
 // new transactions.
 package main
@@ -14,6 +14,8 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+
+	"github.com/AsyncAssassin/go-homework/ledger"
 )
 
 func main() {
@@ -23,11 +25,11 @@ func main() {
 	fmt.Println("Ledger service started")
 
 	// Initial budgets are set in code, then budgets.json adds and updates some.
-	for _, b := range []Budget{
-		{Category: "еда", Limit: 5000, Period: PeriodMonth},
-		{Category: "транспорт", Limit: 2000, Period: PeriodMonth},
+	for _, b := range []ledger.Budget{
+		{Category: "еда", Limit: 5000, Period: ledger.PeriodMonth},
+		{Category: "транспорт", Limit: 2000, Period: ledger.PeriodMonth},
 	} {
-		if err := SetBudget(b); err != nil {
+		if _, err := ledger.SetBudget(b); err != nil {
 			fmt.Fprintln(os.Stderr, "Cannot set budget:", err)
 			os.Exit(1)
 		}
@@ -51,7 +53,7 @@ func main() {
 	printBudgets(os.Stdout, now)
 
 	fmt.Println("\nAdding transactions:")
-	for _, tx := range []Transaction{
+	for _, tx := range []ledger.Transaction{
 		{Amount: 1250.50, Category: "еда", Description: "продукты на неделю", Date: now},
 		{Amount: 2000, Category: "транспорт", Description: "проездной", Date: now},
 		{Amount: 3500, Category: "еда", Description: "кафе", Date: now},
@@ -69,7 +71,7 @@ func main() {
 	showLoadErrors()
 
 	fmt.Println()
-	printTransactions(os.Stdout, ListTransactions())
+	printTransactions(os.Stdout, ledger.ListTransactions())
 	fmt.Println()
 	printBudgets(os.Stdout, now)
 
@@ -97,14 +99,14 @@ func loadBudgetsFromFile(path string) error {
 	}
 	defer f.Close()
 
-	return LoadBudgets(bufio.NewReader(f))
+	return ledger.LoadBudgets(bufio.NewReader(f))
 }
 
 // addAndReport adds tx and prints whether it was accepted.
-func addAndReport(tx Transaction) {
-	err := AddTransaction(tx)
+func addAndReport(tx ledger.Transaction) {
+	_, err := ledger.AddTransaction(tx)
 
-	var budgetErr *BudgetExceededError
+	var budgetErr *ledger.BudgetExceededError
 	switch {
 	case err == nil:
 		fmt.Printf("  added    %q %.2f (%s)\n", tx.Description, tx.Amount, tx.Category)
@@ -128,7 +130,7 @@ func showLoadErrors() {
 		{name: "invalid limit", input: `[{"category": "кафе", "limit": 1000}, {"category": "такси", "limit": -5}]`},
 		{name: "invalid period", input: `[{"category": "кафе", "limit": 1000, "period": "week"}]`},
 	} {
-		fmt.Printf("  %s: %v\n", c.name, LoadBudgets(strings.NewReader(c.input)))
+		fmt.Printf("  %s: %v\n", c.name, ledger.LoadBudgets(strings.NewReader(c.input)))
 	}
 	fmt.Printf("  missing file: %v\n", loadBudgetsFromFile("no-such-dir/budgets.json"))
 }
@@ -138,17 +140,17 @@ func showLoadErrors() {
 // returns errors, so they are printed here.
 func showValidation(w io.Writer) {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	for _, v := range []Validatable{
-		Transaction{Amount: 450, Category: "еда", Description: "ланч"},
-		Transaction{Amount: -100, Category: "еда", Description: "возврат"},
-		Transaction{Amount: 300, Category: " ", Description: "такси"},
-		Transaction{Amount: 50, Category: "еда", Description: "кофе", Date: time.Date(0, time.March, 1, 12, 0, 0, 0, time.Local)},
-		Budget{Category: "кафе", Limit: 3000, Period: PeriodMonth},
-		Budget{Category: "кафе", Limit: 0},
-		Budget{Limit: 1000},
+	for _, v := range []ledger.Validatable{
+		ledger.Transaction{Amount: 450, Category: "еда", Description: "ланч"},
+		ledger.Transaction{Amount: -100, Category: "еда", Description: "возврат"},
+		ledger.Transaction{Amount: 300, Category: " ", Description: "такси"},
+		ledger.Transaction{Amount: 50, Category: "еда", Description: "кофе", Date: time.Date(0, time.March, 1, 12, 0, 0, 0, time.Local)},
+		ledger.Budget{Category: "кафе", Limit: 3000, Period: ledger.PeriodMonth},
+		ledger.Budget{Category: "кафе", Limit: 0},
+		ledger.Budget{Limit: 1000},
 	} {
 		result := "ok"
-		if err := CheckValid(v); err != nil {
+		if err := ledger.CheckValid(v); err != nil {
 			result = "invalid: " + err.Error()
 		}
 		fmt.Fprintf(tw, "  %T\t%s\t%s\n", v, describe(v), result)
@@ -158,17 +160,17 @@ func showValidation(w io.Writer) {
 
 // describe returns a short description of a transaction or a budget for
 // the validation demo.
-func describe(v Validatable) string {
+func describe(v ledger.Validatable) string {
 	switch v := v.(type) {
-	case Transaction:
+	case ledger.Transaction:
 		s := fmt.Sprintf("%.2f %q (%s)", v.Amount, v.Description, categoryOrNone(v.Category))
 		if !v.Date.IsZero() {
 			s += " on " + v.Date.Format(time.DateOnly)
 		}
 		return s
-	case Budget:
+	case ledger.Budget:
 		s := fmt.Sprintf("%s %.2f", categoryOrNone(v.Category), v.Limit)
-		if v.Period != PeriodNone {
+		if v.Period != ledger.PeriodNone {
 			s += " a " + string(v.Period)
 		}
 		return s
@@ -187,7 +189,7 @@ func categoryOrNone(category string) string {
 
 // printTransactions writes transactions to w as a table. Dates are shown in
 // the local time zone, the one budget periods are counted in.
-func printTransactions(w io.Writer, txs []Transaction) {
+func printTransactions(w io.Writer, txs []ledger.Transaction) {
 	fmt.Fprintf(w, "Transactions (%d):\n", len(txs))
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "ID\tDATE\tCATEGORY\tAMOUNT\tDESCRIPTION")
@@ -201,18 +203,17 @@ func printTransactions(w io.Writer, txs []Transaction) {
 // printBudgets writes every budget with the amounts spent and left to w.
 // The amounts are for the budget period that contains now.
 func printBudgets(w io.Writer, now time.Time) {
-	list := ListBudgets()
+	list := ledger.ListBudgetUsage(now)
 	fmt.Fprintf(w, "Budgets (%d):\n", len(list))
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "CATEGORY\tPERIOD\tLIMIT\tSPENT\tLEFT")
-	for _, b := range list {
-		period := b.Period.label(now)
+	for _, u := range list {
+		period := u.PeriodLabel
 		if period == "" {
 			period = "all time"
 		}
-		spent := spentIn(b.Category, b.Period, now)
 		fmt.Fprintf(tw, "%s\t%s\t%.2f\t%.2f\t%.2f\n",
-			b.Category, period, b.Limit, spent, remaining(b.Limit, spent))
+			u.Budget.Category, period, u.Budget.Limit, u.Spent, remaining(u.Budget.Limit, u.Spent))
 	}
 	tw.Flush()
 }

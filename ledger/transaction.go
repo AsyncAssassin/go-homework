@@ -1,10 +1,9 @@
-package main
+package ledger
 
 import (
 	"errors"
 	"fmt"
 	"math"
-	"slices"
 	"strings"
 	"time"
 )
@@ -40,10 +39,6 @@ var (
 	ErrInvalidDate   = errors.New("invalid date")
 )
 
-// transactions is the in-memory transaction storage. It starts empty and is
-// not safe for concurrent use.
-var transactions = []Transaction{}
-
 // Validate reports whether tx can be stored. The amount must be from 0.01
 // to 1e12, the category must not be blank, and a set date must be from
 // 0001-01-02 to 9999-12-30 UTC. A zero date means "no date" and is valid:
@@ -63,15 +58,16 @@ func (tx Transaction) Validate() error {
 	return nil
 }
 
-// AddTransaction checks tx with Validate, assigns it the next ID and stores
-// it. The amount is rounded to kopecks, the category is normalized with
-// normalizeCategory, the description is trimmed, and a zero date is replaced
-// with the current time. If the category has a budget and tx does not fit
-// into it within the budget period of tx.Date, AddTransaction returns
-// a *BudgetExceededError and stores nothing.
-func AddTransaction(tx Transaction) error {
+// AddTransaction checks tx with Validate, assigns it the next ID, stores it
+// and returns the stored transaction. The amount is rounded to kopecks, the
+// category is normalized with normalizeCategory, the description is trimmed,
+// and a zero date is replaced with the current time. If the category has
+// a budget and tx does not fit into it within the budget period of tx.Date,
+// AddTransaction returns a *BudgetExceededError and stores nothing.
+// It is safe for concurrent use.
+func AddTransaction(tx Transaction) (Transaction, error) {
 	if err := tx.Validate(); err != nil {
-		return err
+		return Transaction{}, err
 	}
 	tx.Amount = roundToKopecks(tx.Amount)
 	tx.Category = normalizeCategory(tx.Category)
@@ -80,19 +76,14 @@ func AddTransaction(tx Transaction) error {
 	if tx.Date.IsZero() {
 		tx.Date = time.Now()
 	}
-	if err := checkBudget(tx); err != nil {
-		return err
-	}
-
-	tx.ID = len(transactions) + 1
-	transactions = append(transactions, tx)
-	return nil
+	return store.addTransaction(tx)
 }
 
-// ListTransactions returns a copy of all stored transactions, so callers
-// cannot change the storage through the returned slice.
+// ListTransactions returns a copy of all stored transactions, newest first:
+// by date, and by ID for equal dates. Callers cannot change the storage
+// through the returned slice.
 func ListTransactions() []Transaction {
-	return slices.Clone(transactions)
+	return store.listTransactions()
 }
 
 // inAmountRange reports whether x is an acceptable amount or limit.

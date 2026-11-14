@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/AsyncAssassin/go-homework/ledger"
 )
 
 func TestRemaining(t *testing.T) {
@@ -28,52 +30,53 @@ func TestRemaining(t *testing.T) {
 }
 
 func TestPrintTransactions(t *testing.T) {
-	resetStorage()
+	ledger.Reset()
 	// The first and the last half hour of October 2026 in the local time zone,
 	// given in UTC-12 and UTC+14. The table must show the local dates.
 	first := time.Date(2026, time.October, 1, 0, 30, 0, 0, time.Local)
 	last := time.Date(2026, time.October, 31, 23, 30, 0, 0, time.Local)
-	for _, tx := range []Transaction{
+	for _, tx := range []ledger.Transaction{
 		{Amount: 10, Category: "еда", Description: "завтрак", Date: first.In(time.FixedZone("UTC-12", -12*60*60))},
 		{Amount: 20, Category: "еда", Description: "ужин", Date: last.In(time.FixedZone("UTC+14", 14*60*60))},
 	} {
-		if err := AddTransaction(tx); err != nil {
-			t.Fatalf("AddTransaction() error = %v", err)
+		if _, err := ledger.AddTransaction(tx); err != nil {
+			t.Fatalf("ledger.AddTransaction() error = %v", err)
 		}
 	}
 
 	var out strings.Builder
-	printTransactions(&out, ListTransactions())
+	printTransactions(&out, ledger.ListTransactions())
 
+	// Newest first, as ListTransactions returns them.
 	want := "Transactions (2):\n" +
 		"ID  DATE        CATEGORY  AMOUNT  DESCRIPTION\n" +
-		"1   2026-10-01  еда       10.00   завтрак\n" +
-		"2   2026-10-31  еда       20.00   ужин\n"
+		"2   2026-10-31  еда       20.00   ужин\n" +
+		"1   2026-10-01  еда       10.00   завтрак\n"
 	if got := out.String(); got != want {
 		t.Errorf("printTransactions() wrote:\n%s\nwant:\n%s", got, want)
 	}
 }
 
 func TestPrintBudgets(t *testing.T) {
-	resetStorage()
-	for _, b := range []Budget{
-		{Category: "еда", Limit: 5000, Period: PeriodMonth},
-		{Category: "отпуск", Limit: 90000, Period: PeriodYear},
+	ledger.Reset()
+	for _, b := range []ledger.Budget{
+		{Category: "еда", Limit: 5000, Period: ledger.PeriodMonth},
+		{Category: "отпуск", Limit: 90000, Period: ledger.PeriodYear},
 		{Category: "ремонт", Limit: 100000},
 	} {
-		if err := SetBudget(b); err != nil {
-			t.Fatalf("SetBudget() error = %v", err)
+		if _, err := ledger.SetBudget(b); err != nil {
+			t.Fatalf("ledger.SetBudget() error = %v", err)
 		}
 	}
 	now := time.Date(2026, time.October, 3, 12, 0, 0, 0, time.Local)
-	for _, tx := range []Transaction{
+	for _, tx := range []ledger.Transaction{
 		{Amount: 1000, Category: "еда", Date: now},
 		{Amount: 700, Category: "еда", Date: now.AddDate(0, -1, 0)},      // previous month
 		{Amount: 30000, Category: "отпуск", Date: now.AddDate(0, -3, 0)}, // same year
 		{Amount: 20000, Category: "ремонт", Date: now.AddDate(-1, 0, 0)}, // a year ago
 	} {
-		if err := AddTransaction(tx); err != nil {
-			t.Fatalf("AddTransaction() error = %v", err)
+		if _, err := ledger.AddTransaction(tx); err != nil {
+			t.Fatalf("ledger.AddTransaction() error = %v", err)
 		}
 	}
 
@@ -97,13 +100,13 @@ func TestShowValidation(t *testing.T) {
 	// Each line shows the type the interface held, the value and the result
 	// of CheckValid; the columns are separated by two or more spaces.
 	want := [][3]string{
-		{"main.Transaction", `450.00 "ланч" (еда)`, "ok"},
-		{"main.Transaction", `-100.00 "возврат" (еда)`, "invalid: invalid amount -100: must be from 0.01 to 1e+12"},
-		{"main.Transaction", `300.00 "такси" (no category)`, "invalid: category must not be empty"},
-		{"main.Transaction", `50.00 "кофе" (еда) on 0000-03-01`, "invalid: invalid date 0000-03-01: must be from 0001-01-02 to 9999-12-30 UTC"},
-		{"main.Budget", "кафе 3000.00 a month", "ok"},
-		{"main.Budget", "кафе 0.00", `invalid: invalid limit 0 for "кафе": must be from 0.01 to 1e+12`},
-		{"main.Budget", "no category 1000.00", "invalid: category must not be empty"},
+		{"ledger.Transaction", `450.00 "ланч" (еда)`, "ok"},
+		{"ledger.Transaction", `-100.00 "возврат" (еда)`, "invalid: invalid amount -100: must be from 0.01 to 1e+12"},
+		{"ledger.Transaction", `300.00 "такси" (no category)`, "invalid: category must not be empty"},
+		{"ledger.Transaction", `50.00 "кофе" (еда) on 0000-03-01`, "invalid: invalid date 0000-03-01: must be from 0001-01-02 to 9999-12-30 UTC"},
+		{"ledger.Budget", "кафе 3000.00 a month", "ok"},
+		{"ledger.Budget", "кафе 0.00", `invalid: invalid limit 0 for "кафе": must be from 0.01 to 1e+12`},
+		{"ledger.Budget", "no category 1000.00", "invalid: category must not be empty"},
 	}
 	columns := regexp.MustCompile(` {2,}`)
 	lines := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
@@ -120,24 +123,24 @@ func TestShowValidation(t *testing.T) {
 
 func TestLoadBudgetsFromFile(t *testing.T) {
 	t.Run("bundled budgets.json", func(t *testing.T) {
-		resetStorage()
-		if err := loadBudgetsFromFile("budgets.json"); err != nil {
+		ledger.Reset()
+		if err := loadBudgetsFromFile(filepath.Join("..", "..", "budgets.json")); err != nil {
 			t.Fatalf("loadBudgetsFromFile() error = %v", err)
 		}
 		// The README shows this file and the demo output that depends on it.
-		want := []Budget{
-			{Category: "еда", Limit: 5000, Period: PeriodMonth},
-			{Category: "развлечения", Limit: 30000, Period: PeriodYear},
+		want := []ledger.Budget{
+			{Category: "еда", Limit: 5000, Period: ledger.PeriodMonth},
+			{Category: "развлечения", Limit: 30000, Period: ledger.PeriodYear},
 			{Category: "ремонт", Limit: 100000},
-			{Category: "транспорт", Limit: 2500, Period: PeriodMonth},
+			{Category: "транспорт", Limit: 2500, Period: ledger.PeriodMonth},
 		}
-		if got := ListBudgets(); !slices.Equal(got, want) {
+		if got := ledger.ListBudgets(); !slices.Equal(got, want) {
 			t.Errorf("budgets = %+v, want %+v", got, want)
 		}
 	})
 
 	t.Run("broken JSON", func(t *testing.T) {
-		resetStorage()
+		ledger.Reset()
 		path := filepath.Join(t.TempDir(), "budgets.json")
 		if err := os.WriteFile(path, []byte(`[{"category": "еда", "limit": 1`), 0o600); err != nil {
 			t.Fatal(err)
@@ -148,7 +151,7 @@ func TestLoadBudgetsFromFile(t *testing.T) {
 	})
 
 	t.Run("null instead of an array", func(t *testing.T) {
-		resetStorage()
+		ledger.Reset()
 		path := filepath.Join(t.TempDir(), "budgets.json")
 		if err := os.WriteFile(path, []byte("null"), 0o600); err != nil {
 			t.Fatal(err)
@@ -159,7 +162,7 @@ func TestLoadBudgetsFromFile(t *testing.T) {
 	})
 
 	t.Run("missing file", func(t *testing.T) {
-		resetStorage()
+		ledger.Reset()
 		err := loadBudgetsFromFile(filepath.Join(t.TempDir(), "missing.json"))
 		if !errors.Is(err, fs.ErrNotExist) {
 			t.Fatalf("loadBudgetsFromFile() error = %v, want %v", err, fs.ErrNotExist)
@@ -169,31 +172,31 @@ func TestLoadBudgetsFromFile(t *testing.T) {
 
 func TestLoadBudgetsIfExists(t *testing.T) {
 	// Every case starts with this budget; it must survive a missing file.
-	initial := Budget{Category: "еда", Limit: 100}
+	initial := ledger.Budget{Category: "еда", Limit: 100}
 
 	tests := []struct {
 		name       string
 		content    string // written to the file; "" means no file at all
 		wantLoaded bool
 		wantErr    bool
-		want       []Budget // budgets after the call
+		want       []ledger.Budget // budgets after the call
 	}{
 		{
 			name:       "file exists",
 			content:    `[{"category": "еда", "limit": 5000, "period": "month"}]`,
 			wantLoaded: true,
-			want:       []Budget{{Category: "еда", Limit: 5000, Period: PeriodMonth}},
+			want:       []ledger.Budget{{Category: "еда", Limit: 5000, Period: ledger.PeriodMonth}},
 		},
-		{name: "file is missing", want: []Budget{initial}},
-		{name: "file is broken", content: `[{"category": "еда"`, wantErr: true, want: []Budget{initial}},
-		{name: "file is empty", content: "", wantErr: true, want: []Budget{initial}},
+		{name: "file is missing", want: []ledger.Budget{initial}},
+		{name: "file is broken", content: `[{"category": "еда"`, wantErr: true, want: []ledger.Budget{initial}},
+		{name: "file is empty", content: "", wantErr: true, want: []ledger.Budget{initial}},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			resetStorage()
-			if err := SetBudget(initial); err != nil {
-				t.Fatalf("SetBudget() error = %v", err)
+			ledger.Reset()
+			if _, err := ledger.SetBudget(initial); err != nil {
+				t.Fatalf("ledger.SetBudget() error = %v", err)
 			}
 			path := filepath.Join(t.TempDir(), "budgets.json")
 			if tt.name != "file is missing" {
@@ -209,14 +212,14 @@ func TestLoadBudgetsIfExists(t *testing.T) {
 			if loaded != tt.wantLoaded {
 				t.Errorf("loadBudgetsIfExists() loaded = %v, want %v", loaded, tt.wantLoaded)
 			}
-			if got := ListBudgets(); !slices.Equal(got, tt.want) {
+			if got := ledger.ListBudgets(); !slices.Equal(got, tt.want) {
 				t.Errorf("budgets = %+v, want %+v", got, tt.want)
 			}
 		})
 	}
 
 	t.Run("directory instead of a file", func(t *testing.T) {
-		resetStorage()
+		ledger.Reset()
 		loaded, err := loadBudgetsIfExists(t.TempDir())
 		if err == nil || loaded {
 			t.Fatalf("loadBudgetsIfExists() = %v, %v; want false and an error", loaded, err)
