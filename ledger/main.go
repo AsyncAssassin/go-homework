@@ -72,6 +72,9 @@ func main() {
 	printTransactions(os.Stdout, ListTransactions())
 	fmt.Println()
 	printBudgets(os.Stdout, now)
+
+	fmt.Println("\nValidation through the Validatable interface:")
+	showValidation(os.Stdout)
 }
 
 // loadBudgetsIfExists loads budgets from the JSON file at path and reports
@@ -128,6 +131,34 @@ func showLoadErrors() {
 		fmt.Printf("  %s: %v\n", c.name, LoadBudgets(strings.NewReader(c.input)))
 	}
 	fmt.Printf("  missing file: %v\n", loadBudgetsFromFile("no-such-dir/budgets.json"))
+}
+
+// showValidation checks transactions and budgets with CheckValid, which
+// takes any Validatable, and writes the results to w. Validate itself only
+// returns errors, so they are printed here.
+func showValidation(w io.Writer) {
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	for _, c := range []struct {
+		name string
+		v    Validatable
+	}{
+		{name: `450.00 "ланч" (еда)`, v: Transaction{Amount: 450, Category: "еда", Description: "ланч"}},
+		{name: `-100.00 "возврат" (еда)`, v: Transaction{Amount: -100, Category: "еда", Description: "возврат"}},
+		{name: `300.00 "такси" (no category)`, v: Transaction{Amount: 300, Category: " ", Description: "такси"}},
+		{name: `50.00 "кофе" (еда) in the year 0`, v: Transaction{
+			Amount: 50, Category: "еда", Description: "кофе", Date: time.Date(0, time.March, 1, 12, 0, 0, 0, time.Local),
+		}},
+		{name: "кафе 3000.00 a month", v: Budget{Category: "кафе", Limit: 3000, Period: PeriodMonth}},
+		{name: "кафе 0.00", v: Budget{Category: "кафе", Limit: 0}},
+		{name: "no category 1000.00", v: Budget{Limit: 1000}},
+	} {
+		result := "ok"
+		if err := CheckValid(c.v); err != nil {
+			result = "invalid: " + err.Error()
+		}
+		fmt.Fprintf(tw, "  %T\t%s\t%s\n", c.v, c.name, result)
+	}
+	tw.Flush()
 }
 
 // printTransactions writes transactions to w as a table. Dates are shown in

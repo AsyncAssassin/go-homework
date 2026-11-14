@@ -89,6 +89,31 @@ func TestPrintBudgets(t *testing.T) {
 	}
 }
 
+func TestShowValidation(t *testing.T) {
+	var out strings.Builder
+	showValidation(&out)
+
+	// Each line shows the type the interface held and the result of CheckValid.
+	want := []struct{ typ, result string }{
+		{typ: "main.Transaction", result: "ok"},
+		{typ: "main.Transaction", result: "invalid: invalid amount -100: must be from 0.01 to 1e+12"},
+		{typ: "main.Transaction", result: "invalid: category must not be empty"},
+		{typ: "main.Transaction", result: "invalid: invalid date 0000-03-01: the year must be from 1 to 9999"},
+		{typ: "main.Budget", result: "ok"},
+		{typ: "main.Budget", result: `invalid: invalid limit 0 for "кафе": must be from 0.01 to 1e+12`},
+		{typ: "main.Budget", result: "invalid: category must not be empty"},
+	}
+	lines := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
+	if len(lines) != len(want) {
+		t.Fatalf("showValidation() wrote %d lines, want %d:\n%s", len(lines), len(want), out.String())
+	}
+	for i, w := range want {
+		if !strings.HasPrefix(lines[i], "  "+w.typ+" ") || !strings.HasSuffix(lines[i], "  "+w.result) {
+			t.Errorf("line %d = %q, want type %q and result %q", i+1, lines[i], w.typ, w.result)
+		}
+	}
+}
+
 func TestLoadBudgetsFromFile(t *testing.T) {
 	t.Run("bundled budgets.json", func(t *testing.T) {
 		resetStorage()
