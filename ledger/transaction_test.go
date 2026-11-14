@@ -28,6 +28,11 @@ func TestAddTransaction(t *testing.T) {
 		{name: "infinite amount", tx: Transaction{Amount: math.Inf(1), Category: "еда"}, wantErr: ErrInvalidAmount},
 		{name: "too large amount", tx: Transaction{Amount: 2e12, Category: "еда"}, wantErr: ErrInvalidAmount},
 		{name: "blank category", tx: Transaction{Amount: 100, Category: "  "}, wantErr: ErrEmptyCategory},
+		{
+			name:    "year out of range",
+			tx:      Transaction{Amount: 100, Category: "еда", Date: time.Date(10000, time.January, 1, 12, 0, 0, 0, time.Local)},
+			wantErr: ErrInvalidDate,
+		},
 	}
 
 	for _, tt := range tests {

@@ -24,31 +24,57 @@ const (
 	maxAmount = 1e12
 )
 
-// Errors returned by AddTransaction for invalid transactions.
+// Accepted years of transaction dates in the local time zone: the dates
+// that can be written as YYYY-MM-DD with a year of at least 1.
+const (
+	minYear = 1
+	maxYear = 9999
+)
+
+// Errors returned by Transaction.Validate and Budget.Validate.
 var (
 	ErrInvalidAmount = errors.New("invalid amount")
 	ErrEmptyCategory = errors.New("category must not be empty")
+	ErrInvalidDate   = errors.New("invalid date")
 )
 
 // transactions is the in-memory transaction storage. It starts empty and is
 // not safe for concurrent use.
 var transactions = []Transaction{}
 
-// AddTransaction validates tx, assigns it the next ID and stores it.
-// The amount is rounded to kopecks, the category is normalized with
+// Validate reports whether tx can be stored. The amount must be from 0.01
+// to 1e12, the category must not be blank, and the year of a set date must
+// be from 1 to 9999 in the local time zone. A zero date is valid:
+// AddTransaction replaces it with the current time.
+func (tx Transaction) Validate() error {
+	if !inAmountRange(tx.Amount) {
+		return fmt.Errorf("%w %v: must be from %g to %g", ErrInvalidAmount, tx.Amount, minAmount, maxAmount)
+	}
+	if normalizeCategory(tx.Category) == "" {
+		return ErrEmptyCategory
+	}
+	if !tx.Date.IsZero() {
+		date := tx.Date.In(time.Local)
+		if year := date.Year(); year < minYear || year > maxYear {
+			return fmt.Errorf("%w %s: the year must be from %d to %d",
+				ErrInvalidDate, date.Format(time.DateOnly), minYear, maxYear)
+		}
+	}
+	return nil
+}
+
+// AddTransaction checks tx with Validate, assigns it the next ID and stores
+// it. The amount is rounded to kopecks, the category is normalized with
 // normalizeCategory, the description is trimmed, and a zero date is replaced
 // with the current time. If the category has a budget and tx does not fit
 // into it within the budget period of tx.Date, AddTransaction returns
 // a *BudgetExceededError and stores nothing.
 func AddTransaction(tx Transaction) error {
-	if !inAmountRange(tx.Amount) {
-		return fmt.Errorf("%w %v: must be from %g to %g", ErrInvalidAmount, tx.Amount, minAmount, maxAmount)
+	if err := tx.Validate(); err != nil {
+		return err
 	}
 	tx.Amount = roundToKopecks(tx.Amount)
 	tx.Category = normalizeCategory(tx.Category)
-	if tx.Category == "" {
-		return ErrEmptyCategory
-	}
 	tx.Description = strings.TrimSpace(tx.Description)
 	// The budget period depends on the date, so set it before the check.
 	if tx.Date.IsZero() {

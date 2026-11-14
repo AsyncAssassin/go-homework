@@ -87,14 +87,35 @@ func (e *BudgetExceededError) Is(target error) bool {
 // and is not safe for concurrent use.
 var budgets = map[string]Budget{}
 
-// SetBudget adds a budget for b.Category or replaces the existing one as
-// a whole, period included: a budget without a period replaces a monthly one
-// with a limit for all time.
+// Validate reports whether b can be stored. The category must not be blank,
+// the limit must be from 0.01 to 1e12, and the period must be "month",
+// "year" or empty. Case and surrounding spaces of the category and the
+// period do not matter.
+func (b Budget) Validate() error {
+	category := normalizeCategory(b.Category)
+	if category == "" {
+		return ErrEmptyCategory
+	}
+	if !inAmountRange(b.Limit) {
+		return fmt.Errorf("%w %v for %q: must be from %g to %g",
+			ErrInvalidLimit, b.Limit, category, minAmount, maxAmount)
+	}
+	if !normalizePeriod(b.Period).valid() {
+		// Report the period as written, so it is easy to find in the input.
+		return fmt.Errorf("%w %q for %q: must be %q, %q or empty",
+			ErrInvalidPeriod, b.Period, category, PeriodMonth, PeriodYear)
+	}
+	return nil
+}
+
+// SetBudget checks b with Validate and adds a budget for b.Category or
+// replaces the existing one as a whole, period included: a budget without
+// a period replaces a monthly one with a limit for all time.
 func SetBudget(b Budget) error {
-	b, err := normalizeBudget(b)
-	if err != nil {
+	if err := b.Validate(); err != nil {
 		return err
 	}
+	b = normalizeBudget(b)
 	budgets[b.Category] = b
 	return nil
 }
@@ -141,14 +162,14 @@ func LoadBudgets(r io.Reader) error {
 	// Check every budget before changing the storage.
 	seen := make(map[string]bool, len(list))
 	for i, b := range list {
-		b, err := normalizeBudget(b)
-		if err != nil {
+		if err := b.Validate(); err != nil {
 			return fmt.Errorf("load budgets: budget #%d: %w", i+1, err)
 		}
-		if seen[b.Category] {
-			return fmt.Errorf("load budgets: budget #%d: duplicate category %q", i+1, b.Category)
+		category := normalizeCategory(b.Category)
+		if seen[category] {
+			return fmt.Errorf("load budgets: budget #%d: duplicate category %q", i+1, category)
 		}
-		seen[b.Category] = true
+		seen[category] = true
 	}
 
 	for _, b := range list {
@@ -159,26 +180,19 @@ func LoadBudgets(r io.Reader) error {
 	return nil
 }
 
-// normalizeBudget checks that the budget is valid, trims and lowercases its
-// category and period, and rounds the limit to kopecks.
-func normalizeBudget(b Budget) (Budget, error) {
+// normalizeBudget trims and lowercases the category and the period of
+// a valid budget and rounds its limit to kopecks.
+func normalizeBudget(b Budget) Budget {
 	b.Category = normalizeCategory(b.Category)
-	if b.Category == "" {
-		return Budget{}, ErrEmptyCategory
-	}
-	if !inAmountRange(b.Limit) {
-		return Budget{}, fmt.Errorf("%w %v for %q: must be from %g to %g",
-			ErrInvalidLimit, b.Limit, b.Category, minAmount, maxAmount)
-	}
-	period := Period(strings.ToLower(strings.TrimSpace(string(b.Period))))
-	if !period.valid() {
-		// Report the period as written, so it is easy to find in the input.
-		return Budget{}, fmt.Errorf("%w %q for %q: must be %q, %q or empty",
-			ErrInvalidPeriod, b.Period, b.Category, PeriodMonth, PeriodYear)
-	}
-	b.Period = period
+	b.Period = normalizePeriod(b.Period)
 	b.Limit = roundToKopecks(b.Limit)
-	return b, nil
+	return b
+}
+
+// normalizePeriod trims and lowercases the period, so " Month" and "month"
+// are the same period.
+func normalizePeriod(p Period) Period {
+	return Period(strings.ToLower(strings.TrimSpace(string(p))))
 }
 
 // checkBudget returns a *BudgetExceededError if tx does not fit into the
