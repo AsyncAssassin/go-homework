@@ -53,6 +53,17 @@ func (r *statusRecorder) Write(b []byte) (int, error) {
 	return r.ResponseWriter.Write(b)
 }
 
+// FlushError flushes the original ResponseWriter, which starts the
+// response. http.ResponseController calls it rather than going around
+// statusRecorder through Unwrap, so a flushed response counts as started.
+func (r *statusRecorder) FlushError() error {
+	if err := http.NewResponseController(r.ResponseWriter).Flush(); err != nil {
+		return err
+	}
+	r.wroteHeader = true
+	return nil
+}
+
 // Unwrap lets http.ResponseController reach the original ResponseWriter.
 func (r *statusRecorder) Unwrap() http.ResponseWriter {
 	return r.ResponseWriter

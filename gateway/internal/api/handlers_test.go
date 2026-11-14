@@ -29,20 +29,165 @@ func serve(t *testing.T, method, path, body string) *httptest.ResponseRecorder {
 	return rec
 }
 
-// checkResponse checks the status, the JSON Content-Type and, unless
-// wantBody is empty, the exact body without the final newline.
+// checkResponse checks a recorded response like checkResult.
 func checkResponse(t *testing.T, rec *httptest.ResponseRecorder, wantStatus int, wantBody string) {
 	t.Helper()
-	body := strings.TrimSuffix(rec.Body.String(), "\n")
-	if rec.Code != wantStatus {
-		t.Errorf("status = %d, want %d; body %s", rec.Code, wantStatus, body)
+	checkResult(t, rec.Result(), wantStatus, wantBody)
+}
+
+// checkResult checks the status, the JSON Content-Type and, unless wantBody
+// is empty, the exact body without the final newline.
+func checkResult(t *testing.T, resp *http.Response, wantStatus int, wantBody string) {
+	t.Helper()
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read the body: %v", err)
 	}
-	if got := rec.Header().Get("Content-Type"); got != contentTypeJSON {
+	body := strings.TrimSuffix(string(b), "\n")
+	if resp.StatusCode != wantStatus {
+		t.Errorf("status = %d, want %d; body %s", resp.StatusCode, wantStatus, body)
+	}
+	if got := resp.Header.Get("Content-Type"); got != contentTypeJSON {
 		t.Errorf("Content-Type = %q, want %q", got, contentTypeJSON)
 	}
 	if wantBody != "" && body != wantBody {
 		t.Errorf("body = %s, want %s", body, wantBody)
 	}
+}
+
+// step is one request of a flow and its expected response.
+type step struct {
+	name       string
+	method     string
+	path       string
+	body       string // "" for none
+	wantStatus int
+	wantBody   string
+}
+
+// runFlow starts a test server with an empty ledger and sends the steps to
+// it in order, each in its own subtest. The steps share the ledger, so they
+// do not run in parallel: each one sees what the previous ones stored. The
+// flow stops at the first failed step, because the next ones depend on it.
+func runFlow(t *testing.T, steps []step) {
+	t.Helper()
+	ledger.Reset()
+	srv := httptest.NewServer(NewRouter())
+	t.Cleanup(func() {
+		srv.Close()
+		ledger.Reset()
+	})
+
+	for _, s := range steps {
+		ok := t.Run(s.name, func(t *testing.T) {
+			req, err := http.NewRequest(s.method, srv.URL+s.path, strings.NewReader(s.body))
+			if err != nil {
+				t.Fatalf("NewRequest() error = %v", err)
+			}
+			if s.body != "" {
+				req.Header.Set("Content-Type", "application/json")
+			}
+			resp, err := srv.Client().Do(req)
+			if err != nil {
+				t.Fatalf("%s %s: %v", s.method, s.path, err)
+			}
+			defer resp.Body.Close()
+			checkResult(t, resp, s.wantStatus, s.wantBody)
+		})
+		if !ok {
+			return
+		}
+	}
+}
+
+func TestBudgetsFlow(t *testing.T) {
+	const food = `[{"category":"еда","limit":5000}]`
+
+	runFlow(t, []step{
+		{
+			name:   "create",
+			method: http.MethodPost, path: "/api/budgets", body: `{"category":"еда","limit":5000}`,
+			wantStatus: http.StatusCreated, wantBody: `{"category":"еда","limit":5000}`,
+		},
+		{
+			name:   "list",
+			method: http.MethodGet, path: "/api/budgets",
+			wantStatus: http.StatusOK, wantBody: food,
+		},
+		{
+			name:   "bad_json",
+			method: http.MethodPost, path: "/api/budgets", body: `{"category":"еда",`,
+			wantStatus: http.StatusBadRequest, wantBody: `{"error":"invalid JSON"}`,
+		},
+		{
+			name:   "zero_limit",
+			method: http.MethodPost, path: "/api/budgets", body: `{"category":"еда","limit":0}`,
+			wantStatus: http.StatusBadRequest,
+			wantBody:   `{"error":"invalid limit 0 for \"еда\": must be from 0.01 to 1e+12"}`,
+		},
+		{
+			name:   "rejected_not_stored",
+			method: http.MethodGet, path: "/api/budgets",
+			wantStatus: http.StatusOK, wantBody: food,
+		},
+		{
+			name:   "update",
+			method: http.MethodPost, path: "/api/budgets", body: `{"category":"еда","limit":6000,"period":"month"}`,
+			wantStatus: http.StatusCreated, wantBody: `{"category":"еда","limit":6000,"period":"month"}`,
+		},
+		{
+			name:   "list_updated",
+			method: http.MethodGet, path: "/api/budgets",
+			wantStatus: http.StatusOK, wantBody: `[{"category":"еда","limit":6000,"period":"month"}]`,
+		},
+	})
+}
+
+func TestTransactionsFlow(t *testing.T) {
+	const lunch = `{"id":1,"amount":450,"category":"еда","description":"ланч","date":"2025-09-10"}`
+
+	runFlow(t, []step{
+		{
+			name:   "budget",
+			method: http.MethodPost, path: "/api/budgets", body: `{"category":"еда","limit":5000}`,
+			wantStatus: http.StatusCreated, wantBody: `{"category":"еда","limit":5000}`,
+		},
+		{
+			name:   "ok",
+			method: http.MethodPost, path: "/api/transactions",
+			body:       `{"amount":450,"category":"еда","description":"ланч","date":"2025-09-10"}`,
+			wantStatus: http.StatusCreated, wantBody: lunch,
+		},
+		{
+			name:   "list",
+			method: http.MethodGet, path: "/api/transactions",
+			wantStatus: http.StatusOK, wantBody: `[` + lunch + `]`,
+		},
+		{
+			// 450 + 4600 is over the limit of 5000.
+			name:   "exceeded",
+			method: http.MethodPost, path: "/api/transactions",
+			body:       `{"amount":4600,"category":"еда","description":"ресторан","date":"2025-09-11"}`,
+			wantStatus: http.StatusConflict, wantBody: `{"error":"budget exceeded"}`,
+		},
+		{
+			name:   "bad_json",
+			method: http.MethodPost, path: "/api/transactions", body: `{"amount":450,`,
+			wantStatus: http.StatusBadRequest, wantBody: `{"error":"invalid JSON"}`,
+		},
+		{
+			name:   "rejected_not_stored",
+			method: http.MethodGet, path: "/api/transactions",
+			wantStatus: http.StatusOK, wantBody: `[` + lunch + `]`,
+		},
+		{
+			// The rejected transactions took neither the budget nor an ID.
+			name:   "rest_of_the_limit",
+			method: http.MethodPost, path: "/api/transactions", body: `{"amount":4550,"category":"еда","date":"2025-09-12"}`,
+			wantStatus: http.StatusCreated,
+			wantBody:   `{"id":2,"amount":4550,"category":"еда","description":"","date":"2025-09-12"}`,
+		},
+	})
 }
 
 func TestCreateTransaction(t *testing.T) {
@@ -162,6 +307,12 @@ func TestCreateTransaction(t *testing.T) {
 			body:       lunch + ` {}`,
 			wantStatus: http.StatusBadRequest,
 			wantBody:   `{"error":"request body must contain a single JSON object"}`,
+		},
+		{
+			name:       "invalid JSON after the object",
+			body:       lunch + ` x`,
+			wantStatus: http.StatusBadRequest,
+			wantBody:   `{"error":"invalid JSON"}`,
 		},
 		{
 			name:       "body too large",

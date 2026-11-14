@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/AsyncAssassin/go-homework/ledger"
 )
@@ -144,6 +145,67 @@ func TestRecoverAbortHandler(t *testing.T) {
 	}()
 	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/x", nil))
 	t.Error("ServeHTTP returned, want it to panic again with http.ErrAbortHandler")
+}
+
+func TestRecoverAfterFlush(t *testing.T) {
+	logs := captureLog(t)
+
+	// A flush sends the status and the headers, so the response has started
+	// even without a body.
+	h := Logging(Recover(JSONContentType(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if err := http.NewResponseController(w).Flush(); err != nil {
+			t.Errorf("Flush() error = %v", err)
+		}
+		panic("boom")
+	}))))
+	rec := httptest.NewRecorder()
+	defer func() {
+		if v := recover(); v != http.ErrAbortHandler {
+			t.Errorf("recovered %v, want http.ErrAbortHandler", v)
+		}
+		if !rec.Flushed || rec.Code != http.StatusOK || rec.Body.Len() != 0 {
+			t.Errorf("flushed %t, status %d, body %q; want a flushed 200 without a body", rec.Flushed, rec.Code, rec.Body)
+		}
+		if !strings.Contains(logs.String(), "GET /x aborted ") {
+			t.Errorf("log = %q, want the request logged as aborted", logs)
+		}
+	}()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/x", nil))
+	t.Error("ServeHTTP returned, want it to abort the response")
+}
+
+func TestRecoverAfterFailedFlush(t *testing.T) {
+	// The embedding hides the Flush method of the recorder, so the flush
+	// fails and the response has not started yet.
+	rec := httptest.NewRecorder()
+	w := struct{ http.ResponseWriter }{rec}
+	h := Recover(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if err := http.NewResponseController(w).Flush(); !errors.Is(err, http.ErrNotSupported) {
+			t.Errorf("Flush() error = %v, want %v", err, http.ErrNotSupported)
+		}
+		panic("boom")
+	}))
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/x", nil))
+
+	checkResponse(t, rec, http.StatusInternalServerError, `{"error":"internal server error"}`)
+}
+
+func TestMiddlewareUnwrap(t *testing.T) {
+	// http.ResponseController reaches the methods of the original
+	// ResponseWriter, such as SetWriteDeadline, through the wrappers.
+	srv := httptest.NewServer(Logging(Recover(JSONContentType(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if err := http.NewResponseController(w).SetWriteDeadline(time.Now().Add(time.Minute)); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+		}
+	})))))
+	defer srv.Close()
+
+	resp, err := srv.Client().Get(srv.URL)
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+	checkResult(t, resp, http.StatusOK, "")
 }
 
 func TestJSONContentType(t *testing.T) {

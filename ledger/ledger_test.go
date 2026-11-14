@@ -173,3 +173,30 @@ func TestCheckValid(t *testing.T) {
 		})
 	}
 }
+
+// TestBudgetRule follows a budget through a transaction that fits into it
+// and one that does not. It changes the package storage, so it does not run
+// in parallel.
+func TestBudgetRule(t *testing.T) {
+	Reset()
+	t.Cleanup(Reset)
+
+	if _, err := SetBudget(Budget{Category: "еда", Limit: 5000}); err != nil {
+		t.Fatalf("SetBudget() error = %v", err)
+	}
+	if _, err := AddTransaction(Transaction{Amount: 4500, Category: "еда", Description: "продукты"}); err != nil {
+		t.Fatalf("AddTransaction() within the limit error = %v, want nil", err)
+	}
+	if got := len(ListTransactions()); got != 1 {
+		t.Fatalf("ListTransactions() has %d transactions, want 1", got)
+	}
+
+	// 4500 + 600 is over the limit of 5000.
+	_, err := AddTransaction(Transaction{Amount: 600, Category: "еда", Description: "ресторан"})
+	if !errors.Is(err, ErrBudgetExceeded) {
+		t.Errorf("AddTransaction() over the limit error = %v, want %v", err, ErrBudgetExceeded)
+	}
+	if got := len(ListTransactions()); got != 1 {
+		t.Errorf("ListTransactions() has %d transactions after the rejected one, want 1", got)
+	}
+}

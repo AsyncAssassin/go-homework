@@ -7,6 +7,7 @@
 | 3 | Ввод-вывод, обработка ошибок: бюджеты в Ledger | `ledger/` |
 | 4 | ООП: валидация через интерфейс в Ledger | `ledger/` |
 | 5 | Веб-приложения: REST API в Gateway | `gateway/`, `ledger/` |
+| 6 | Тестирование | `gateway/`, `ledger/` |
 
 Состояние репозитория на момент сдачи каждого ДЗ отмечено тегом `hwN`.
 
@@ -296,6 +297,49 @@ Middleware `Logging` пишет в консоль метод, путь, стат
 ```
 
 Тесты HTTP-слоя находятся в `gateway/internal/api`: обработчики проверяются через `httptest` вместе с маршрутами и middleware.
+
+## ДЗ 6. Тестирование
+
+```sh
+cd ledger                                    # затем то же в gateway
+go test ./...
+go test ./... -cover -coverprofile=cover.out
+go tool cover -html=cover.out -o cover.html  # отчёт по строкам, открывается в браузере
+go tool cover -func=cover.out | tail -1      # итоговый процент
+```
+
+В корне репозитория нет `go.mod`, поэтому тесты и покрытие запускаются в каталоге каждого модуля. Файлы `cover.out` и `cover.html` в Git не попадают.
+
+### Покрытие тестами
+
+Измерено командами выше:
+
+| Пакет | Покрытие |
+|-------|----------|
+| `ledger` | 100% |
+| `ledger/cmd/ledger` | 53.6% |
+| `gateway/internal/api` | 97.4% |
+| `gateway` (`main.go`) | 0% |
+| Модуль `ledger` целиком | 81.5% |
+| Модуль `gateway` целиком | 92.1% |
+
+Без тестов остаются функции `main` и печать консольного демо: их проверяет запуск программ (`go run ./cmd/ledger`, `go run .` и curl из раздела ДЗ 5). В `gateway/internal/api` не покрыты ответы 500 на прочие ошибки ledger: обработчики проверяют данные через `Validate()` до вызова ledger, а хранилище в памяти других ошибок не возвращает. Эти ветки понадобятся, когда ledger начнёт работать с базой данных. Также не покрыт отказ для даты `0001-01-01`, который срабатывает только в поясе UTC.
+
+### Что проверяют тесты
+
+| Требование | Тест |
+|------------|------|
+| `ledger.Reset()` очищает транзакции и бюджеты | тесты с общим состоянием вызывают `Reset()` в начале, `TestBudgetRule` и HTTP-цепочки ещё и в `t.Cleanup` |
+| Табличный тест `Transaction.Validate()` | `TestTransactionValidate` в `ledger/ledger_test.go`: валидная транзакция, нулевая и отрицательная сумма, пустая категория, границы суммы и даты |
+| Табличный тест `Budget.Validate()` | `TestBudgetValidate` там же: положительный, нулевой и отрицательный лимит, пустая категория, период |
+| Превышение бюджета | `TestBudgetRule` там же: бюджет «еда» 5000, транзакция на 4500 проходит, на 600 получает `ErrBudgetExceeded`, длина `ListTransactions()` не меняется. Граничные случаи в `TestAddTransactionBudget` (`ledger/budget_test.go`) |
+| HTTP `/api/budgets` | `TestBudgetsFlow` в `gateway/internal/api/handlers_test.go`: подтесты `create` (201), `list` (200), `bad_json` и `zero_limit` (400 и `{"error":"..."}`), `update`. Отрицательный лимит и другие ошибки в таблице `TestSetBudget` |
+| HTTP `/api/transactions` | `TestTransactionsFlow` там же: `budget`, `ok` (201), `list` (200), `exceeded` (409 и `{"error":"budget exceeded"}`), `bad_json` (400), отклонённые запросы не сохраняются. Ошибки валидации в таблице `TestCreateTransaction` |
+| Заголовок и формат ответов | каждый HTTP-тест сверяет статус и `Content-Type: application/json; charset=utf-8`, почти все случаи сравнивают и тело ответа целиком |
+
+Цепочки `TestBudgetsFlow` и `TestTransactionsFlow` отправляют запросы настоящему HTTP-серверу `httptest.NewServer` с роутером и middleware, каждый шаг в своём `t.Run`. Остальные тесты обработчиков (`TestCreateTransaction`, `TestSetBudget` и другие) разбирают отдельные случаи таблицами через `httptest.NewRecorder`.
+
+Табличные unit-тесты `Validate`, `CheckValid` и преобразователей DTO не трогают общие данные, поэтому они и их подтесты помечены `t.Parallel()`. Тесты, которые меняют хранилище ledger или стандартный логгер, идут последовательно. Независимость от порядка запуска проверяет `go test -race -shuffle=on -count=3 ./...`.
 
 ## Тесты
 
