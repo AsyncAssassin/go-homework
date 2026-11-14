@@ -100,7 +100,7 @@ func TestShowValidation(t *testing.T) {
 		{"main.Transaction", `450.00 "ланч" (еда)`, "ok"},
 		{"main.Transaction", `-100.00 "возврат" (еда)`, "invalid: invalid amount -100: must be from 0.01 to 1e+12"},
 		{"main.Transaction", `300.00 "такси" (no category)`, "invalid: category must not be empty"},
-		{"main.Transaction", `50.00 "кофе" (еда) on 0000-03-01`, "invalid: invalid date 0000-03-01: the year must be from 1 to 9999"},
+		{"main.Transaction", `50.00 "кофе" (еда) on 0000-03-01`, "invalid: invalid date 0000-03-01: must be from 0001-01-02 to 9999-12-30 UTC"},
 		{"main.Budget", "кафе 3000.00 a month", "ok"},
 		{"main.Budget", "кафе 0.00", `invalid: invalid limit 0 for "кафе": must be from 0.01 to 1e+12`},
 		{"main.Budget", "no category 1000.00", "invalid: category must not be empty"},

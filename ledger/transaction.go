@@ -24,11 +24,13 @@ const (
 	maxAmount = 1e12
 )
 
-// Accepted years of transaction dates: the dates that can be written as
-// YYYY-MM-DD with a year of at least 1.
-const (
-	minYear = 1
-	maxYear = 9999
+// Transaction dates must be at or after minDate and before maxDate. The day
+// of margin on each side keeps a valid date within the years 1-9999 in every
+// time zone, so it can always be written as YYYY-MM-DD, and makes the check
+// depend only on the moment, not on the time zone it is given in.
+var (
+	minDate = time.Date(1, time.January, 2, 0, 0, 0, 0, time.UTC)
+	maxDate = time.Date(9999, time.December, 31, 0, 0, 0, 0, time.UTC)
 )
 
 // Errors returned by Transaction.Validate and Budget.Validate.
@@ -43,9 +45,9 @@ var (
 var transactions = []Transaction{}
 
 // Validate reports whether tx can be stored. The amount must be from 0.01
-// to 1e12, the category must not be blank, and the year of a set date must
-// be from 1 to 9999 in the time zone the date is given in. A zero date means
-// "no date" and is valid: AddTransaction replaces it with the current time.
+// to 1e12, the category must not be blank, and a set date must be from
+// 0001-01-02 to 9999-12-30 UTC. A zero date means "no date" and is valid:
+// AddTransaction replaces it with the current time.
 func (tx Transaction) Validate() error {
 	if !inAmountRange(tx.Amount) {
 		return fmt.Errorf("%w %v: must be from %g to %g", ErrInvalidAmount, tx.Amount, minAmount, maxAmount)
@@ -53,11 +55,10 @@ func (tx Transaction) Validate() error {
 	if normalizeCategory(tx.Category) == "" {
 		return ErrEmptyCategory
 	}
-	if !tx.Date.IsZero() {
-		if year := tx.Date.Year(); year < minYear || year > maxYear {
-			return fmt.Errorf("%w %s: the year must be from %d to %d",
-				ErrInvalidDate, tx.Date.Format(time.DateOnly), minYear, maxYear)
-		}
+	if !tx.Date.IsZero() && (tx.Date.Before(minDate) || !tx.Date.Before(maxDate)) {
+		return fmt.Errorf("%w %s: must be from %s to %s UTC", ErrInvalidDate,
+			tx.Date.Format(time.DateOnly), minDate.Format(time.DateOnly),
+			maxDate.Add(-time.Nanosecond).Format(time.DateOnly))
 	}
 	return nil
 }

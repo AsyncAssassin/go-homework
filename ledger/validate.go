@@ -25,7 +25,8 @@ var ErrNothingToValidate = errors.New("nothing to validate")
 // CheckValid validates v through the Validatable interface, so it handles
 // transactions, budgets and any other type with a Validate method the same
 // way. A nil v, including a nil pointer such as (*Transaction)(nil), gives
-// ErrNothingToValidate instead of a panic.
+// ErrNothingToValidate instead of a panic: Validate is never called for
+// a nil pointer, even if the type could handle a nil receiver.
 func CheckValid(v Validatable) error {
 	if v == nil {
 		return ErrNothingToValidate

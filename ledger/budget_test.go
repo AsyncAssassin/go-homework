@@ -216,15 +216,12 @@ func TestAddTransactionBudgetZeroDate(t *testing.T) {
 	if err := SetBudget(Budget{Category: "еда", Limit: 1000, Period: PeriodMonth}); err != nil {
 		t.Fatalf("SetBudget() error = %v", err)
 	}
-	// Spending a second after the zero time.Time: in every time zone it falls
-	// into the same month as a zero date would.
-	early := time.Time{}.Add(time.Second)
-	if err := AddTransaction(Transaction{Amount: 800, Category: "еда", Date: early}); err != nil {
-		t.Fatalf("AddTransaction() error = %v", err)
-	}
+	// Spending at the zero time, stored directly because AddTransaction would
+	// date it now. In every time zone it is in the same month as a zero date.
+	transactions = append(transactions, Transaction{ID: 1, Amount: 800, Category: "еда"})
 
 	// The zero date becomes the current time before the budget check, so the
-	// early spending is in another month and does not count.
+	// spending at the zero time is in another month and does not count.
 	if err := AddTransaction(Transaction{Amount: 300, Category: "еда"}); err != nil {
 		t.Fatalf("AddTransaction() error = %v, want nil", err)
 	}
