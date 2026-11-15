@@ -230,11 +230,11 @@ func TestWriteJSONEncodeError(t *testing.T) {
 	}
 }
 
-func TestWriteInternalError(t *testing.T) {
+func TestWriteServiceError(t *testing.T) {
 	logs := captureLog(t)
 
 	rec := httptest.NewRecorder()
-	writeInternalError(rec, errors.New("disk is full"))
+	writeServiceError(rec, httptest.NewRequest("GET", "/", nil), errors.New("disk is full"))
 
 	// The details go to the log, not to the client.
 	checkResponse(t, rec, http.StatusInternalServerError, `{"error":"internal server error"}`)

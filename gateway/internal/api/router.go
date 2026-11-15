@@ -5,6 +5,7 @@ package api
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/AsyncAssassin/go-homework/ledger/service"
 )
@@ -12,7 +13,7 @@ import (
 // NewRouter returns the HTTP handler of the gateway: GET /ping and the REST
 // API of the ledger under /api. Every response has the JSON Content-Type,
 // every error is {"error": "..."}, and every request is logged.
-func NewRouter(svc service.Service) http.Handler {
+func NewRouter(svc service.Service, timeout time.Duration) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /ping", handlePing)
 	mux.HandleFunc("/ping", methodNotAllowed("GET, HEAD"))
@@ -20,7 +21,7 @@ func NewRouter(svc service.Service) http.Handler {
 	// Without this route ServeMux would redirect /api to /api/.
 	mux.HandleFunc("/api", handleNotFound)
 	mux.HandleFunc("/", handleNotFound)
-	return Logging(Recover(JSONContentType(mux)))
+	return Logging(Recover(JSONContentType(Timeout(timeout, mux))))
 }
 
 // newAPIRouter returns the routes of the REST API. Their paths are relative

@@ -236,7 +236,7 @@ func TestAddTransactionBudgetZeroDate(t *testing.T) {
 	// Spending at the zero time, stored directly because AddTransaction would
 	// date it today. In every time zone it is in the same month as a zero date.
 	repo := memory.New()
-	svc := service.New(repo, repo, repo)
+	svc := service.New(repo, repo, repo, nil)
 	if _, err := svc.SetBudget(context.Background(), domain.Budget{Category: "еда", Limit: 1000, Period: domain.PeriodMonth}); err != nil {
 		t.Fatal(err)
 	}

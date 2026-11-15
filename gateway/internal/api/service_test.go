@@ -44,13 +44,16 @@ func (s transactionService) AddTransaction(ctx context.Context, tx domain.Transa
 }
 
 func TestHandlerUsesInjectedService(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+	type contextKey struct{}
+	ctx := context.WithValue(context.Background(), contextKey{}, "request")
 	called := false
 	svc := transactionService{add: func(got context.Context, tx domain.Transaction) (domain.Transaction, error) {
 		called = true
-		if got != ctx || !errors.Is(got.Err(), context.Canceled) {
-			t.Error("request context was replaced")
+		if got.Value(contextKey{}) != "request" {
+			t.Error("request context value was lost")
+		}
+		if _, ok := got.Deadline(); !ok {
+			t.Error("request deadline is missing")
 		}
 		if tx.Amount != -1 || tx.Category != " Еда " {
 			t.Errorf("handler changed the domain input: %+v", tx)
@@ -59,7 +62,7 @@ func TestHandlerUsesInjectedService(t *testing.T) {
 	}}
 	req := httptest.NewRequest(http.MethodPost, "/api/transactions", strings.NewReader(`{"amount":-1,"category":" Еда "}`)).WithContext(ctx)
 	rec := httptest.NewRecorder()
-	NewRouter(svc).ServeHTTP(rec, req)
+	NewRouter(svc, DefaultRequestTimeout).ServeHTTP(rec, req)
 	if !called {
 		t.Fatal("service was not called")
 	}

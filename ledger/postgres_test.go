@@ -101,7 +101,7 @@ func connectTest(t *testing.T) *testStore {
 	t.Cleanup(func() { c.Close() })
 	repo := pg.New(pool)
 	cachedRepo := cached.New(repo, repo, c)
-	s := &testStore{Service: service.New(cachedRepo, cachedRepo, repo), db: pool, cache: c}
+	s := &testStore{Service: service.New(cachedRepo, cachedRepo, repo, cachedRepo), db: pool, cache: c}
 	exec(t, s, `TRUNCATE budgets, expenses RESTART IDENTITY`)
 	deleteKeys(t, budgetsKey)
 	return s
@@ -906,4 +906,45 @@ func captureLog(t *testing.T) *bytes.Buffer {
 		log.SetFlags(flags)
 	})
 	return &buf
+}
+
+// A real lock forces QueryContext to wait past the deadline without adding
+// artificial delays or test switches to the service or SQL repository.
+func TestPostgresReportCancellation(t *testing.T) {
+	s := connectTest(t)
+	day := domain.Day(2026, 11, 15)
+	key := reportKey(day, day)
+	deleteKeys(t, key)
+	tx, err := s.db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(context.Background(), "LOCK TABLE expenses IN ACCESS EXCLUSIVE MODE"); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err = s.GetReportSummary(ctx, day, day)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("error = %v, want deadline", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("cancellation took %v", elapsed)
+	}
+	if inUse := s.db.Stats().InUse; inUse != 1 {
+		t.Fatalf("%d connections in use; only the locking transaction should remain", inUse)
+	}
+	var totals []domain.CategoryTotal
+	if found, err := s.cache.Get(context.Background(), key, &totals); err != nil || found {
+		t.Fatalf("failed report cached: found=%v err=%v", found, err)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	report, err := s.GetReportSummary(context.Background(), day, day)
+	if err != nil || report.Total != 0 || len(report.Categories) != 0 {
+		t.Fatalf("report after cancellation = %+v, %v", report, err)
+	}
 }

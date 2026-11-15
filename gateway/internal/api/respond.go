@@ -1,11 +1,13 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"reflect"
 	"strings"
@@ -41,9 +43,15 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, errorResponse{Error: msg})
 }
 
-// writeInternalError logs err and answers 500 without its details, which
-// are of no use to the client and may reveal internals.
-func writeInternalError(w http.ResponseWriter, err error) {
+// writeServiceError maps cancellation to the same response for every endpoint.
+// Storage errors remain private; the request context also covers driver errors
+// that do not wrap context.Canceled or context.DeadlineExceeded.
+func writeServiceError(w http.ResponseWriter, r *http.Request, err error) {
+	if r.Context().Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		log.Printf("request canceled: %v", err)
+		writeError(w, http.StatusGatewayTimeout, "request timed out")
+		return
+	}
 	log.Printf("internal error: %v", err)
 	writeError(w, http.StatusInternalServerError, "internal server error")
 }
@@ -72,6 +80,10 @@ func decodeJSON[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
 	}
 	if err != nil {
 		status, msg := decodeErrorResponse(err)
+		var networkError net.Error
+		if r.Context().Err() != nil || errors.As(err, &networkError) && networkError.Timeout() {
+			status, msg = http.StatusGatewayTimeout, "request timed out"
+		}
 		writeError(w, status, msg)
 		var zero T
 		return zero, false

@@ -40,23 +40,20 @@ func reportKey(from, to time.Time) string {
 	return "report:summary:" + formatDate(from) + ":" + formatDate(to)
 }
 
-// ReportSummary logs whether the report came from the cache, so the effect
-// of the cache can be seen in the log.
-func (s *Repository) ReportSummary(ctx context.Context, from, to time.Time) ([]domain.CategoryTotal, error) {
+// GetReport logs hits and misses without making cache failures fatal.
+func (s *Repository) GetReport(ctx context.Context, from, to time.Time) ([]domain.CategoryTotal, bool) {
 	key := reportKey(from, to)
 	var totals []domain.CategoryTotal
 	if s.get(ctx, key, &totals) {
 		log.Printf("report cache hit: %s", key)
-		return totals, nil
+		return totals, true
 	}
 	log.Printf("report cache miss: %s", key)
+	return nil, false
+}
 
-	totals, err := s.ExpenseRepository.ReportSummary(ctx, from, to)
-	if err != nil {
-		return nil, err
-	}
-	s.set(ctx, key, totals, reportTTL)
-	return totals, nil
+func (s *Repository) SetReport(ctx context.Context, from, to time.Time, totals []domain.CategoryTotal) {
+	s.set(ctx, reportKey(from, to), totals, reportTTL)
 }
 
 func (s *Repository) ListBudgets(ctx context.Context) ([]domain.Budget, error) {

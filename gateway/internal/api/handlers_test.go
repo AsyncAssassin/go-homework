@@ -27,7 +27,7 @@ func serve(t *testing.T, svc service.Service, method, path, body string) *httpte
 		r = strings.NewReader(body)
 	}
 	rec := httptest.NewRecorder()
-	NewRouter(svc).ServeHTTP(rec, httptest.NewRequest(method, path, r))
+	NewRouter(svc, DefaultRequestTimeout).ServeHTTP(rec, httptest.NewRequest(method, path, r))
 	return rec
 }
 
@@ -74,7 +74,7 @@ type step struct {
 func runFlow(t *testing.T, steps []step) {
 	t.Helper()
 	svc := ledger.NewMemory()
-	srv := httptest.NewServer(NewRouter(svc))
+	srv := httptest.NewServer(NewRouter(svc, DefaultRequestTimeout))
 	t.Cleanup(func() {
 		srv.Close()
 	})

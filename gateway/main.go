@@ -25,9 +25,10 @@ const shutdownTimeout = 10 * time.Second
 
 func main() {
 	addr := flag.String("addr", ":8080", "address to listen on")
+	requestTimeout := flag.Duration("request-timeout", api.DefaultRequestTimeout, "timeout of each HTTP request")
 	flag.Parse()
 
-	if err := run(*addr); err != nil {
+	if err := run(*addr, *requestTimeout); err != nil {
 		log.Fatalf("Gateway service failed: %v", err)
 	}
 }
@@ -36,7 +37,10 @@ func main() {
 // until SIGINT or SIGTERM. Then it waits for the requests in progress and
 // closes the connections of the ledger. A second signal ends the process
 // without waiting.
-func run(addr string) error {
+func run(addr string, requestTimeout time.Duration) error {
+	if requestTimeout <= 0 {
+		return fmt.Errorf("request-timeout must be positive")
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -56,7 +60,7 @@ func run(addr string) error {
 		return err
 	}
 	srv := &http.Server{
-		Handler:           api.NewRouter(svc),
+		Handler:           api.NewRouter(svc, requestTimeout),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,

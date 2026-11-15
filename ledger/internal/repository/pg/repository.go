@@ -129,30 +129,26 @@ func (s *queries) ListBudgets(ctx context.Context) ([]domain.Budget, error) {
 	return list, nil
 }
 
-func (s *queries) ReportSummary(ctx context.Context, from, to time.Time) ([]domain.CategoryTotal, error) {
+func (s *queries) ListCategories(ctx context.Context, from, to time.Time) ([]string, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT category, SUM(amount) FROM expenses WHERE date BETWEEN $1 AND $2
-		GROUP BY category ORDER BY category COLLATE "C"`,
+		`SELECT DISTINCT category COLLATE "C" FROM expenses WHERE date >= $1 AND date < $2 ORDER BY 1`,
 		formatDate(from), formatDate(to))
 	if err != nil {
-		return nil, fmt.Errorf("sum the expenses: %w", err)
+		return nil, fmt.Errorf("list expense categories: %w", err)
 	}
 	defer rows.Close()
-
-	// Not nil, as in memory: a report without expenses is cached as [], not
-	// null.
-	totals := []domain.CategoryTotal{}
+	categories := []string{}
 	for rows.Next() {
-		var t domain.CategoryTotal
-		if err := rows.Scan(&t.Category, &t.Amount); err != nil {
-			return nil, fmt.Errorf("sum the expenses: %w", err)
+		var category string
+		if err := rows.Scan(&category); err != nil {
+			return nil, fmt.Errorf("list expense categories: %w", err)
 		}
-		totals = append(totals, t)
+		categories = append(categories, category)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("sum the expenses: %w", err)
+		return nil, fmt.Errorf("list expense categories: %w", err)
 	}
-	return totals, nil
+	return categories, nil
 }
 
 // GetBudget reads the budget of category and locks its row until the end

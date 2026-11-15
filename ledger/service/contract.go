@@ -26,10 +26,18 @@ type ledgerService struct {
 	budgets      domain.BudgetRepository
 	expenses     domain.ExpenseRepository
 	transactions domain.TransactionRunner
+	reports      ReportCache
 }
 
 // New assembles a service. All repositories must refer to the same data;
 // transactions supplies uncached repositories for atomic budget checks.
-func New(budgets domain.BudgetRepository, expenses domain.ExpenseRepository, transactions domain.TransactionRunner) Service {
-	return &ledgerService{budgets: budgets, expenses: expenses, transactions: transactions}
+func New(budgets domain.BudgetRepository, expenses domain.ExpenseRepository, transactions domain.TransactionRunner, reports ReportCache) Service {
+	return &ledgerService{budgets: budgets, expenses: expenses, transactions: transactions, reports: reports}
+}
+
+// ReportCache is a best-effort cache of complete category totals. Implementations
+// log cache failures and treat failed reads as misses. Nil disables report caching.
+type ReportCache interface {
+	GetReport(context.Context, time.Time, time.Time) ([]domain.CategoryTotal, bool)
+	SetReport(context.Context, time.Time, time.Time, []domain.CategoryTotal)
 }

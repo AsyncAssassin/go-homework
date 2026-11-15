@@ -177,38 +177,6 @@ func checkBudget(b domain.Budget, spent float64, tx domain.Transaction) error {
 	return nil
 }
 
-// GetReportSummary returns the amount spent in every category from the day
-// of from to the day of to, both included, in the local time zone. Both
-// days must be from 0001-01-02 to 9999-12-30, otherwise the error wraps
-// domain.ErrInvalidDate. The injected repository may cache category totals.
-func (s *ledgerService) GetReportSummary(ctx context.Context, from, to time.Time) (domain.ReportSummary, error) {
-	from, to = domain.StartOfDay(from), domain.StartOfDay(to)
-	// PostgreSQL has no year 0, so such a day must not reach the query.
-	if err := domain.CheckDay(from); err != nil {
-		return domain.ReportSummary{}, err
-	}
-	if err := domain.CheckDay(to); err != nil {
-		return domain.ReportSummary{}, err
-	}
-	if to.Before(from) {
-		return domain.ReportSummary{}, fmt.Errorf("%w: from %s is after to %s", domain.ErrInvalidRange, formatDate(from), formatDate(to))
-	}
-	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
-	defer cancel()
-	totals, err := s.expenses.ReportSummary(ctx, from, to)
-	if err != nil {
-		return domain.ReportSummary{}, err
-	}
-
-	report := domain.ReportSummary{From: from, To: to, Categories: totals}
-	for _, t := range totals {
-		report.Total += t.Amount
-	}
-	// Float sums like 0.1+0.2 are not exactly 0.3.
-	report.Total = roundToKopecks(report.Total)
-	return report, nil
-}
-
 // ListBudgetUsage returns budgets with the amount spent in their current period.
 func (s *ledgerService) ListBudgetUsage(ctx context.Context, date time.Time) ([]domain.BudgetUsage, error) {
 	ctx, cancel := context.WithTimeout(ctx, queryTimeout)

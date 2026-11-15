@@ -114,7 +114,7 @@ func TestAddTransactionUsesTransactionalRepositories(t *testing.T) {
 			}
 			// The regular repositories are nil: a budget decision must use only
 			// the repositories supplied inside the transaction.
-			svc := New(nil, nil, runner)
+			svc := New(nil, nil, runner, nil)
 			ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(time.Second))
 			defer cancel()
 			got, err := svc.AddTransaction(ctx, domain.Transaction{Amount: tt.amount, Category: " Еда ", Description: " lunch ", Date: day.Add(12 * time.Hour)})

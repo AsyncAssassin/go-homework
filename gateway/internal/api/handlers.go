@@ -37,13 +37,16 @@ func (h *handlers) handleCreateTransaction(w http.ResponseWriter, r *http.Reques
 	}
 
 	stored, err := h.service.AddTransaction(r.Context(), tx)
+	if r.Context().Err() != nil {
+		err = r.Context().Err()
+	}
 	switch {
 	case isValidationError(err):
 		writeError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, domain.ErrBudgetExceeded):
 		writeError(w, http.StatusConflict, "budget exceeded")
 	case err != nil:
-		writeInternalError(w, err)
+		writeServiceError(w, r, err)
 	default:
 		writeJSON(w, http.StatusCreated, newTransactionResponse(stored))
 	}
@@ -53,8 +56,11 @@ func (h *handlers) handleCreateTransaction(w http.ResponseWriter, r *http.Reques
 // transactions, newest first.
 func (h *handlers) handleListTransactions(w http.ResponseWriter, r *http.Request) {
 	txs, err := h.service.ListTransactions(r.Context())
+	if r.Context().Err() != nil {
+		err = r.Context().Err()
+	}
 	if err != nil {
-		writeInternalError(w, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, newTransactionResponses(txs))
@@ -71,12 +77,15 @@ func (h *handlers) handleSetBudget(w http.ResponseWriter, r *http.Request) {
 	b := toBudget(req)
 
 	stored, err := h.service.SetBudget(r.Context(), b)
+	if r.Context().Err() != nil {
+		err = r.Context().Err()
+	}
 	if isValidationError(err) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if err != nil {
-		writeInternalError(w, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, newBudgetResponse(stored))
@@ -86,8 +95,11 @@ func (h *handlers) handleSetBudget(w http.ResponseWriter, r *http.Request) {
 // by category.
 func (h *handlers) handleListBudgets(w http.ResponseWriter, r *http.Request) {
 	budgets, err := h.service.ListBudgets(r.Context())
+	if r.Context().Err() != nil {
+		err = r.Context().Err()
+	}
 	if err != nil {
-		writeInternalError(w, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, newBudgetResponses(budgets))
@@ -106,11 +118,14 @@ func (h *handlers) handleReportSummary(w http.ResponseWriter, r *http.Request) {
 	}
 
 	report, err := h.service.GetReportSummary(r.Context(), from, to)
+	if r.Context().Err() != nil {
+		err = r.Context().Err()
+	}
 	switch {
 	case errors.Is(err, domain.ErrInvalidRange), errors.Is(err, domain.ErrInvalidDate):
 		writeError(w, http.StatusBadRequest, err.Error())
 	case err != nil:
-		writeInternalError(w, err)
+		writeServiceError(w, r, err)
 	default:
 		writeJSON(w, http.StatusOK, newReportSummaryResponse(report))
 	}

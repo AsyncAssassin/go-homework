@@ -20,7 +20,7 @@ type data struct {
 }
 
 type Repository struct {
-	mu   sync.Mutex
+	mu   sync.RWMutex
 	data data
 }
 
@@ -54,8 +54,8 @@ func (r *Repository) AddTransaction(ctx context.Context, tx domain.Transaction) 
 }
 
 func (r *Repository) ListTransactions(ctx context.Context) ([]domain.Transaction, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	return r.data.ListTransactions(ctx)
 }
 
@@ -66,27 +66,27 @@ func (r *Repository) SetBudgets(ctx context.Context, list ...domain.Budget) erro
 }
 
 func (r *Repository) GetBudget(ctx context.Context, category string) (domain.Budget, bool, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	return r.data.GetBudget(ctx, category)
 }
 
 func (r *Repository) ListBudgets(ctx context.Context) ([]domain.Budget, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	return r.data.ListBudgets(ctx)
 }
 
 func (r *Repository) SumByCategory(ctx context.Context, category string, from, to time.Time) (float64, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	return r.data.SumByCategory(ctx, category, from, to)
 }
 
-func (r *Repository) ReportSummary(ctx context.Context, from, to time.Time) ([]domain.CategoryTotal, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.data.ReportSummary(ctx, from, to)
+func (r *Repository) ListCategories(ctx context.Context, from, to time.Time) ([]string, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.data.ListCategories(ctx, from, to)
 }
 
 func (d *data) AddTransaction(ctx context.Context, tx domain.Transaction) (domain.Transaction, error) {
@@ -148,6 +148,9 @@ func (d *data) SumByCategory(ctx context.Context, category string, from, to time
 	}
 	var spent float64
 	for _, tx := range d.transactions {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
 		if tx.Category == category && (from.IsZero() && to.IsZero() || !tx.Date.Before(from) && tx.Date.Before(to)) {
 			spent += tx.Amount
 		}
@@ -155,20 +158,23 @@ func (d *data) SumByCategory(ctx context.Context, category string, from, to time
 	return math.Round(spent*100) / 100, nil
 }
 
-func (d *data) ReportSummary(ctx context.Context, from, to time.Time) ([]domain.CategoryTotal, error) {
+func (d *data) ListCategories(ctx context.Context, from, to time.Time) ([]string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	sums := map[string]float64{}
+	seen := map[string]bool{}
 	for _, tx := range d.transactions {
-		if !tx.Date.Before(from) && !tx.Date.After(to) {
-			sums[tx.Category] += tx.Amount
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if !tx.Date.Before(from) && tx.Date.Before(to) {
+			seen[tx.Category] = true
 		}
 	}
-	totals := make([]domain.CategoryTotal, 0, len(sums))
-	for category, amount := range sums {
-		totals = append(totals, domain.CategoryTotal{Category: category, Amount: math.Round(amount*100) / 100})
+	categories := make([]string, 0, len(seen))
+	for category := range seen {
+		categories = append(categories, category)
 	}
-	slices.SortFunc(totals, func(a, b domain.CategoryTotal) int { return strings.Compare(a.Category, b.Category) })
-	return totals, nil
+	slices.Sort(categories)
+	return categories, nil
 }

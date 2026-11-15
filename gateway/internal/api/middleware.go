@@ -1,12 +1,44 @@
 package api
 
 import (
+	"context"
+	"errors"
 	"log"
 	"net/http"
 	"runtime/debug"
 	"strconv"
 	"time"
 )
+
+const DefaultRequestTimeout = 2 * time.Second
+
+// Timeout passes a bounded context to every handler. Handlers and services
+// cooperate with cancellation, so no detached handler can outlive the response.
+func Timeout(timeout time.Duration, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), timeout)
+		defer cancel()
+		if ctx.Err() != nil {
+			writeError(w, http.StatusGatewayTimeout, "request timed out")
+			return
+		}
+		// Context cancellation alone does not interrupt reading a slow HTTP body.
+		controller := http.NewResponseController(w)
+		deadline, _ := ctx.Deadline()
+		if err := controller.SetReadDeadline(deadline); err == nil {
+			defer func() {
+				// Keep an expired deadline: net/http may still try to drain the
+				// unread body before flushing the response and closing it.
+				if time.Now().Before(deadline) {
+					_ = controller.SetReadDeadline(time.Time{})
+				}
+			}()
+		} else if !errors.Is(err, http.ErrNotSupported) {
+			log.Printf("set request read deadline: %v", err)
+		}
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
 
 // Logging logs the method, the path, the status and the duration of every
 // request, for example "POST /api/transactions 201 512.25µs". A response

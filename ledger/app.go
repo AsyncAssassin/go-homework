@@ -51,7 +51,7 @@ func New(ctx context.Context) (service.Service, func() error, error) {
 
 	repo := pg.New(pool)
 	cachedRepo := cached.New(repo, repo, c)
-	svc := service.New(cachedRepo, cachedRepo, repo)
+	svc := service.New(cachedRepo, cachedRepo, repo, cachedRepo)
 	var once sync.Once
 	var closeErr error
 	closeFn := func() error {
@@ -66,7 +66,7 @@ func New(ctx context.Context) (service.Service, func() error, error) {
 // NewMemory returns an independent service for tests and the console demo.
 func NewMemory() service.Service {
 	repo := memory.New()
-	return service.New(repo, repo, repo)
+	return service.New(repo, repo, repo, nil)
 }
 
 // checkTables returns an error if the database has no table of the ledger,
