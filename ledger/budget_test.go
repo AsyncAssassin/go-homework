@@ -41,7 +41,7 @@ func TestSetBudget(t *testing.T) {
 					t.Errorf("SetBudget() = %+v, want the stored budget %+v", got, want[0])
 				}
 			}
-			if stored := ListBudgets(); !slices.Equal(stored, want) {
+			if stored := mustListBudgets(t); !slices.Equal(stored, want) {
 				t.Errorf("budgets = %+v, want %+v", stored, want)
 			}
 		})
@@ -57,7 +57,7 @@ func TestSetBudgetUpdatesLimit(t *testing.T) {
 	}
 
 	want := []Budget{{Category: "еда", Limit: 7000}}
-	if got := ListBudgets(); !slices.Equal(got, want) {
+	if got := mustListBudgets(t); !slices.Equal(got, want) {
 		t.Errorf("budgets = %+v, want %+v", got, want)
 	}
 }
@@ -90,7 +90,7 @@ func TestSetBudgetPeriod(t *testing.T) {
 			if tt.wantErr == nil {
 				want = []Budget{{Category: "еда", Limit: 5000, Period: tt.want}}
 			}
-			if got := ListBudgets(); !slices.Equal(got, want) {
+			if got := mustListBudgets(t); !slices.Equal(got, want) {
 				t.Errorf("budgets = %+v, want %+v", got, want)
 			}
 		})
@@ -120,6 +120,45 @@ func TestPeriodLabel(t *testing.T) {
 				t.Errorf("Period(%q).label(%v) = %q, want %q", tt.period, date, got, tt.want)
 			}
 		}
+	}
+}
+
+func TestPeriodBounds(t *testing.T) {
+	t.Parallel()
+
+	day := Day
+	tests := []struct {
+		name      string
+		period    Period
+		t         time.Time
+		wantStart time.Time
+		wantEnd   time.Time
+		wantOK    bool
+	}{
+		{name: "last hour of a month", period: PeriodMonth, t: day(2026, time.October, 31).Add(23 * time.Hour), wantStart: day(2026, time.October, 1), wantEnd: day(2026, time.November, 1), wantOK: true},
+		// In America/Asuncion this month starts at 01:00: the clocks skipped
+		// midnight of its first day.
+		{name: "month that starts after midnight", period: PeriodMonth, t: day(2023, time.October, 15), wantStart: day(2023, time.October, 1), wantEnd: day(2023, time.November, 1), wantOK: true},
+		{name: "December", period: PeriodMonth, t: day(2026, time.December, 15), wantStart: day(2026, time.December, 1), wantEnd: day(2027, time.January, 1), wantOK: true},
+		{name: "local day given in another zone", period: PeriodMonth, t: day(2026, time.November, 1).In(time.FixedZone("UTC-12", -12*60*60)), wantStart: day(2026, time.November, 1), wantEnd: day(2026, time.December, 1), wantOK: true},
+		{name: "first day of a year", period: PeriodYear, t: day(2026, time.January, 1), wantStart: day(2026, time.January, 1), wantEnd: day(2027, time.January, 1), wantOK: true},
+		{name: "no period", period: PeriodNone, t: day(2026, time.May, 5)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			start, end, ok := tt.period.bounds(tt.t)
+			if !start.Equal(tt.wantStart) || !end.Equal(tt.wantEnd) || ok != tt.wantOK {
+				t.Fatalf("bounds() = %v, %v, %v; want %v, %v, %v", start, end, ok, tt.wantStart, tt.wantEnd, tt.wantOK)
+			}
+			// The bounds and the labels split time the same way.
+			if ok && (tt.period.label(start) != tt.period.label(tt.t) ||
+				tt.period.label(end.Add(-time.Nanosecond)) != tt.period.label(tt.t) ||
+				tt.period.label(end) == tt.period.label(tt.t)) {
+				t.Errorf("bounds() = %v, %v do not match the label %q", start, end, tt.period.label(tt.t))
+			}
+		})
 	}
 }
 
@@ -153,7 +192,11 @@ func TestListBudgetUsage(t *testing.T) {
 		{Budget: Budget{Category: "отпуск", Limit: 90000, Period: PeriodYear}, PeriodLabel: "2026", Spent: 30000},
 		{Budget: Budget{Category: "ремонт", Limit: 100000}, Spent: 20000},
 	}
-	if got := ListBudgetUsage(date); !slices.Equal(got, want) {
+	got, err := ListBudgetUsage(date)
+	if err != nil {
+		t.Fatalf("ListBudgetUsage() error = %v", err)
+	}
+	if !slices.Equal(got, want) {
 		t.Errorf("ListBudgetUsage() = %+v, want %+v", got, want)
 	}
 }
@@ -201,7 +244,7 @@ func TestAddTransactionBudget(t *testing.T) {
 			} else if err != nil {
 				t.Fatalf("AddTransaction() error = %v, want nil", err)
 			}
-			if got := len(ListTransactions()); got != wantStored {
+			if got := len(mustListTransactions(t)); got != wantStored {
 				t.Errorf("stored %d transactions, want %d", got, wantStored)
 			}
 		})
@@ -255,14 +298,56 @@ func TestAddTransactionBudgetZeroDate(t *testing.T) {
 		t.Fatalf("SetBudget() error = %v", err)
 	}
 	// Spending at the zero time, stored directly because AddTransaction would
-	// date it now. In every time zone it is in the same month as a zero date.
-	store.transactions = append(store.transactions, Transaction{ID: 1, Amount: 800, Category: "еда"})
+	// date it today. In every time zone it is in the same month as a zero date.
+	mem := store.(*memoryStore)
+	mem.transactions = append(mem.transactions, Transaction{ID: 1, Amount: 800, Category: "еда"})
 
-	// The zero date becomes the current time before the budget check, so the
+	// The zero date becomes today before the budget check, so the
 	// spending at the zero time is in another month and does not count.
 	if _, err := AddTransaction(Transaction{Amount: 300, Category: "еда"}); err != nil {
 		t.Fatalf("AddTransaction() error = %v, want nil", err)
 	}
+}
+
+// TestSpentIsRounded checks that both storages report the amount spent in
+// kopecks: float sums like 0.1+0.2 are not exactly 0.3.
+func TestSpentIsRounded(t *testing.T) {
+	date := time.Date(2025, time.September, 10, 0, 0, 0, 0, time.Local)
+	check := func(t *testing.T) {
+		if _, err := SetBudget(Budget{Category: "еда", Limit: 0.3}); err != nil {
+			t.Fatalf("SetBudget() error = %v", err)
+		}
+		for _, amount := range []float64{0.1, 0.2} {
+			if _, err := AddTransaction(Transaction{Amount: amount, Category: "еда", Date: date}); err != nil {
+				t.Fatalf("AddTransaction(%v) error = %v", amount, err)
+			}
+		}
+		usage, err := ListBudgetUsage(date)
+		if err != nil {
+			t.Fatalf("ListBudgetUsage() error = %v", err)
+		}
+		if len(usage) != 1 || usage[0].Spent != 0.3 {
+			t.Errorf("ListBudgetUsage() = %+v, want spent 0.3", usage)
+		}
+		_, err = AddTransaction(Transaction{Amount: 0.01, Category: "еда", Date: date})
+		var exceeded *BudgetExceededError
+		if !errors.As(err, &exceeded) {
+			t.Fatalf("AddTransaction() over the limit error = %v, want %v", err, ErrBudgetExceeded)
+		}
+		if exceeded.Spent != 0.3 {
+			t.Errorf("BudgetExceededError.Spent = %v, want 0.3", exceeded.Spent)
+		}
+	}
+
+	t.Run("memory", func(t *testing.T) {
+		Reset()
+		t.Cleanup(Reset)
+		check(t)
+	})
+	t.Run("postgres", func(t *testing.T) {
+		connectTest(t)
+		check(t)
+	})
 }
 
 func TestBudgetExceededError(t *testing.T) {
@@ -385,7 +470,7 @@ func TestLoadBudgets(t *testing.T) {
 				}
 				want = initial
 			}
-			if got := ListBudgets(); !slices.Equal(got, want) {
+			if got := mustListBudgets(t); !slices.Equal(got, want) {
 				t.Errorf("budgets = %+v, want %+v", got, want)
 			}
 		})
@@ -413,4 +498,14 @@ func TestLoadBudgetsReadError(t *testing.T) {
 			}
 		})
 	}
+}
+
+// mustListBudgets returns ListBudgets() and stops the test if it fails.
+func mustListBudgets(t *testing.T) []Budget {
+	t.Helper()
+	list, err := ListBudgets()
+	if err != nil {
+		t.Fatalf("ListBudgets() error = %v", err)
+	}
+	return list
 }

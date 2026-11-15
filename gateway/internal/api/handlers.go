@@ -3,6 +3,7 @@ package api
 import (
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/AsyncAssassin/go-homework/ledger"
 )
@@ -50,7 +51,12 @@ func handleCreateTransaction(w http.ResponseWriter, r *http.Request) {
 // handleListTransactions serves GET /api/transactions: 200 with all
 // transactions, newest first.
 func handleListTransactions(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, newTransactionResponses(ledger.ListTransactions()))
+	txs, err := ledger.ListTransactions()
+	if err != nil {
+		writeInternalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, newTransactionResponses(txs))
 }
 
 // handleSetBudget serves POST /api/budgets: 201 with the stored budget,
@@ -78,5 +84,33 @@ func handleSetBudget(w http.ResponseWriter, r *http.Request) {
 // handleListBudgets serves GET /api/budgets: 200 with all budgets sorted
 // by category.
 func handleListBudgets(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, newBudgetResponses(ledger.ListBudgets()))
+	budgets, err := ledger.ListBudgets()
+	if err != nil {
+		writeInternalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, newBudgetResponses(budgets))
+}
+
+// handleReportSummary serves GET /api/reports/summary?from=YYYY-MM-DD&to=YYYY-MM-DD:
+// 200 with the amount spent in every category from the day from to the day
+// to, both included, and 400 for an invalid date or a range that ends
+// before it starts. The default range is described at reportRange. The
+// ledger caches the report in Redis for 30 seconds.
+func handleReportSummary(w http.ResponseWriter, r *http.Request) {
+	from, to, err := reportRange(r.URL.Query(), time.Now())
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	report, err := ledger.GetReportSummary(r.Context(), from, to)
+	switch {
+	case errors.Is(err, ledger.ErrInvalidRange), errors.Is(err, ledger.ErrInvalidDate):
+		writeError(w, http.StatusBadRequest, err.Error())
+	case err != nil:
+		writeInternalError(w, err)
+	default:
+		writeJSON(w, http.StatusOK, newReportSummaryResponse(report))
+	}
 }

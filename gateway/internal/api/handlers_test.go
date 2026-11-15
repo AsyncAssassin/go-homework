@@ -123,7 +123,7 @@ func TestBudgetsFlow(t *testing.T) {
 			name:   "zero_limit",
 			method: http.MethodPost, path: "/api/budgets", body: `{"category":"еда","limit":0}`,
 			wantStatus: http.StatusBadRequest,
-			wantBody:   `{"error":"invalid limit 0 for \"еда\": must be from 0.01 to 1e+12"}`,
+			wantBody:   `{"error":"invalid limit 0 for \"еда\": must be from 0.01 to 999999999999.99"}`,
 		},
 		{
 			name:   "rejected_not_stored",
@@ -229,13 +229,32 @@ func TestCreateTransaction(t *testing.T) {
 			name:       "zero amount",
 			body:       `{"amount":0,"category":"еда"}`,
 			wantStatus: http.StatusBadRequest,
-			wantBody:   `{"error":"invalid amount 0: must be from 0.01 to 1e+12"}`,
+			wantBody:   `{"error":"invalid amount 0: must be from 0.01 to 999999999999.99"}`,
 		},
 		{
 			name:       "no category",
 			body:       `{"amount":450}`,
 			wantStatus: http.StatusBadRequest,
 			wantBody:   `{"error":"category must not be empty"}`,
+		},
+		{
+			// PostgreSQL cannot store a NUL character in TEXT.
+			name:       "NUL in the category",
+			body:       `{"amount":450,"category":"е\u0000да"}`,
+			wantStatus: http.StatusBadRequest,
+			wantBody:   `{"error":"invalid category: must be valid UTF-8 without NUL characters"}`,
+		},
+		{
+			name:       "NUL in the description",
+			body:       `{"amount":450,"category":"еда","description":"a\u0000b"}`,
+			wantStatus: http.StatusBadRequest,
+			wantBody:   `{"error":"invalid description: must be valid UTF-8 without NUL characters"}`,
+		},
+		{
+			name:       "category too long",
+			body:       `{"amount":450,"category":"` + strings.Repeat("x", 3000) + `"}`,
+			wantStatus: http.StatusBadRequest,
+			wantBody:   `{"error":"invalid category: must be at most 100 characters, got 3000"}`,
 		},
 		{
 			name:       "date in another format",
@@ -250,10 +269,11 @@ func TestCreateTransaction(t *testing.T) {
 			wantBody:   `{"error":"invalid date 0000-03-01: must be from 0001-01-02 to 9999-12-30 UTC"}`,
 		},
 		{
-			// In UTC this date is the zero time, which ledger reads as "no date".
+			// This date is the zero time, which ledger reads as "no date".
 			name:       "first day of the year 1",
 			body:       `{"amount":450,"category":"еда","date":"0001-01-01"}`,
 			wantStatus: http.StatusBadRequest,
+			wantBody:   `{"error":"invalid date 0001-01-01: out of range"}`,
 		},
 		{
 			name:       "invalid JSON",
@@ -339,7 +359,7 @@ func TestCreateTransaction(t *testing.T) {
 			if tt.wantStatus == http.StatusCreated {
 				wantStored = 1
 			}
-			if got := len(ledger.ListTransactions()); got != wantStored {
+			if got := len(mustListTransactions(t)); got != wantStored {
 				t.Errorf("stored %d transactions, want %d", got, wantStored)
 			}
 		})
@@ -415,7 +435,7 @@ func TestSetBudget(t *testing.T) {
 			name:       "zero limit",
 			body:       `{"category":"еда","limit":0}`,
 			wantStatus: http.StatusBadRequest,
-			wantBody:   `{"error":"invalid limit 0 for \"еда\": must be from 0.01 to 1e+12"}`,
+			wantBody:   `{"error":"invalid limit 0 for \"еда\": must be from 0.01 to 999999999999.99"}`,
 			want:       []ledger.Budget{initial},
 		},
 		{
@@ -423,6 +443,20 @@ func TestSetBudget(t *testing.T) {
 			body:       `{"limit":5000}`,
 			wantStatus: http.StatusBadRequest,
 			wantBody:   `{"error":"category must not be empty"}`,
+			want:       []ledger.Budget{initial},
+		},
+		{
+			name:       "NUL in the category",
+			body:       `{"category":"е\u0000да","limit":5000}`,
+			wantStatus: http.StatusBadRequest,
+			wantBody:   `{"error":"invalid category: must be valid UTF-8 without NUL characters"}`,
+			want:       []ledger.Budget{initial},
+		},
+		{
+			name:       "category too long",
+			body:       `{"category":"` + strings.Repeat("x", 3000) + `","limit":5000}`,
+			wantStatus: http.StatusBadRequest,
+			wantBody:   `{"error":"invalid category: must be at most 100 characters, got 3000"}`,
 			want:       []ledger.Budget{initial},
 		},
 		{
@@ -456,7 +490,7 @@ func TestSetBudget(t *testing.T) {
 			}
 
 			checkResponse(t, serve(t, http.MethodPost, "/api/budgets", tt.body), tt.wantStatus, tt.wantBody)
-			if got := ledger.ListBudgets(); !slices.Equal(got, tt.want) {
+			if got := mustListBudgets(t); !slices.Equal(got, tt.want) {
 				t.Errorf("budgets = %+v, want %+v", got, tt.want)
 			}
 		})
@@ -479,4 +513,192 @@ func TestListBudgets(t *testing.T) {
 	// Sorted by category; a budget without a period has no "period" field.
 	checkResponse(t, serve(t, http.MethodGet, "/api/budgets", ""), http.StatusOK,
 		`[{"category":"еда","limit":5000,"period":"month"},{"category":"ремонт","limit":100000}]`)
+}
+
+func TestReportSummary(t *testing.T) {
+	ledger.Reset()
+	for _, body := range []string{
+		`{"amount":450,"category":"еда","description":"ланч","date":"2025-09-10"}`,
+		`{"amount":120,"category":"транспорт","date":"2025-09-11"}`,
+		`{"amount":0.1,"category":"еда","date":"2025-09-30"}`,
+		`{"amount":0.2,"category":"еда","date":"2025-09-30"}`,
+		`{"amount":50,"category":"кафе","date":"2025-08-31"}`,  // the month before
+		`{"amount":999,"category":"кафе","date":"2025-10-01"}`, // the month after
+	} {
+		checkResponse(t, serve(t, http.MethodPost, "/api/transactions", body), http.StatusCreated, "")
+	}
+
+	tests := []struct {
+		name       string
+		query      string
+		wantStatus int
+		wantBody   string
+	}{
+		{
+			name:       "month",
+			query:      "?from=2025-09-01&to=2025-09-30",
+			wantStatus: http.StatusOK,
+			// 450 + 0.1 + 0.2 in kopecks, not 450.30000000000001.
+			wantBody: `{"from":"2025-09-01","to":"2025-09-30","categories":[{"category":"еда","amount":450.3},{"category":"транспорт","amount":120}],"total":570.3}`,
+		},
+		{
+			name:       "one day",
+			query:      "?from=2025-09-30&to=2025-09-30",
+			wantStatus: http.StatusOK,
+			wantBody:   `{"from":"2025-09-30","to":"2025-09-30","categories":[{"category":"еда","amount":0.3}],"total":0.3}`,
+		},
+		{
+			name:       "only from: to the end of its month",
+			query:      "?from=2025-09-11",
+			wantStatus: http.StatusOK,
+			wantBody:   `{"from":"2025-09-11","to":"2025-09-30","categories":[{"category":"еда","amount":0.3},{"category":"транспорт","amount":120}],"total":120.3}`,
+		},
+		{
+			name:       "no expenses",
+			query:      "?from=2025-01-01&to=2025-01-31",
+			wantStatus: http.StatusOK,
+			wantBody:   `{"from":"2025-01-01","to":"2025-01-31","categories":[],"total":0}`,
+		},
+		{
+			// The month of to is cut to the first day of reports.
+			name:       "only to in the first month",
+			query:      "?to=0001-01-15",
+			wantStatus: http.StatusOK,
+			wantBody:   `{"from":"0001-01-02","to":"0001-01-15","categories":[],"total":0}`,
+		},
+		{
+			name:       "first days",
+			query:      "?from=0001-01-02&to=0001-01-15",
+			wantStatus: http.StatusOK,
+			wantBody:   `{"from":"0001-01-02","to":"0001-01-15","categories":[],"total":0}`,
+		},
+		{
+			// The month of from is cut to the last day of reports.
+			name:       "only from in the last month",
+			query:      "?from=9999-12-15",
+			wantStatus: http.StatusOK,
+			wantBody:   `{"from":"9999-12-15","to":"9999-12-30","categories":[],"total":0}`,
+		},
+		{
+			// PostgreSQL has no year 0, so it must not reach the database.
+			name:       "year 0",
+			query:      "?from=0000-01-01&to=2025-09-30",
+			wantStatus: http.StatusBadRequest,
+			wantBody:   `{"error":"invalid date 0000-01-01: must be from 0001-01-02 to 9999-12-30"}`,
+		},
+		{
+			name:       "after the last day",
+			query:      "?from=9999-12-31",
+			wantStatus: http.StatusBadRequest,
+			wantBody:   `{"error":"invalid date 9999-12-31: must be from 0001-01-02 to 9999-12-30"}`,
+		},
+		{
+			// The zero time, which ledger reads as "no date".
+			name:       "first day of the year 1",
+			query:      "?to=0001-01-01",
+			wantStatus: http.StatusBadRequest,
+			wantBody:   `{"error":"invalid date 0001-01-01: out of range"}`,
+		},
+		{
+			name:       "invalid date",
+			query:      "?from=2025-9-1&to=2025-09-30",
+			wantStatus: http.StatusBadRequest,
+			wantBody:   `{"error":"invalid date \"2025-9-1\": must be YYYY-MM-DD"}`,
+		},
+		{
+			name:       "range ends before it starts",
+			query:      "?from=2025-09-30&to=2025-09-01",
+			wantStatus: http.StatusBadRequest,
+			wantBody:   `{"error":"invalid report range: from 2025-09-30 is after to 2025-09-01"}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := serve(t, http.MethodGet, "/api/reports/summary"+tt.query, "")
+			checkResponse(t, rec, tt.wantStatus, tt.wantBody)
+		})
+	}
+}
+
+func TestReportSummaryOfCurrentMonth(t *testing.T) {
+	ledger.Reset()
+	checkResponse(t, serve(t, http.MethodPost, "/api/transactions", `{"amount":100,"category":"еда"}`), http.StatusCreated, "")
+
+	// Without parameters the report covers the current month, today included.
+	rec := serve(t, http.MethodGet, "/api/reports/summary", "")
+	checkResponse(t, rec, http.StatusOK, "")
+	var got ReportSummaryResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	from, to, err := reportRange(nil, time.Now())
+	if err != nil {
+		t.Fatalf("reportRange() error = %v", err)
+	}
+	want := ReportSummaryResponse{
+		From:       from.Format(dateLayout),
+		To:         to.Format(dateLayout),
+		Categories: []CategoryTotalResponse{{Category: "еда", Amount: 100}},
+		Total:      100,
+	}
+	if got.From != want.From || got.To != want.To || !slices.Equal(got.Categories, want.Categories) || got.Total != want.Total {
+		t.Errorf("report = %+v, want %+v", got, want)
+	}
+}
+
+// TestLedgerError checks the answer to a failure of the ledger, such as a
+// lost connection to PostgreSQL: 500 with a general message, while the error
+// itself goes only to the log.
+func TestLedgerError(t *testing.T) {
+	ledger.Reset()
+	t.Cleanup(ledger.Reset)
+	if err := ledger.Close(); err != nil {
+		t.Fatalf("ledger.Close() error = %v", err)
+	}
+	logs := captureLog(t)
+
+	tests := []struct {
+		name   string
+		method string
+		path   string
+		body   string
+	}{
+		{"create transaction", http.MethodPost, "/api/transactions", `{"amount":100,"category":"еда","date":"2025-09-10"}`},
+		{"list transactions", http.MethodGet, "/api/transactions", ""},
+		{"set budget", http.MethodPost, "/api/budgets", `{"category":"еда","limit":5000}`},
+		{"list budgets", http.MethodGet, "/api/budgets", ""},
+		{"report", http.MethodGet, "/api/reports/summary?from=2025-09-01&to=2025-09-30", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logs.Reset()
+			rec := serve(t, tt.method, tt.path, tt.body)
+			checkResponse(t, rec, http.StatusInternalServerError, `{"error":"internal server error"}`)
+			if !strings.Contains(logs.String(), "internal error: ledger is closed") {
+				t.Errorf("log = %q, want the error of the ledger", logs)
+			}
+		})
+	}
+}
+
+// mustListTransactions returns ledger.ListTransactions() and stops the test
+// if it fails.
+func mustListTransactions(t *testing.T) []ledger.Transaction {
+	t.Helper()
+	list, err := ledger.ListTransactions()
+	if err != nil {
+		t.Fatalf("ledger.ListTransactions() error = %v", err)
+	}
+	return list
+}
+
+// mustListBudgets returns ledger.ListBudgets() and stops the test if it
+// fails.
+func mustListBudgets(t *testing.T) []ledger.Budget {
+	t.Helper()
+	list, err := ledger.ListBudgets()
+	if err != nil {
+		t.Fatalf("ledger.ListBudgets() error = %v", err)
+	}
+	return list
 }

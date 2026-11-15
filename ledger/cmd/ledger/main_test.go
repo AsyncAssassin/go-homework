@@ -45,7 +45,9 @@ func TestPrintTransactions(t *testing.T) {
 	}
 
 	var out strings.Builder
-	printTransactions(&out, ledger.ListTransactions())
+	if err := printTransactions(&out); err != nil {
+		t.Fatalf("printTransactions() error = %v", err)
+	}
 
 	// Newest first, as ListTransactions returns them.
 	want := "Transactions (2):\n" +
@@ -81,7 +83,9 @@ func TestPrintBudgets(t *testing.T) {
 	}
 
 	var out strings.Builder
-	printBudgets(&out, now)
+	if err := printBudgets(&out, now); err != nil {
+		t.Fatalf("printBudgets() error = %v", err)
+	}
 
 	want := "Budgets (3):\n" +
 		"CATEGORY  PERIOD    LIMIT      SPENT     LEFT\n" +
@@ -101,11 +105,11 @@ func TestShowValidation(t *testing.T) {
 	// of CheckValid; the columns are separated by two or more spaces.
 	want := [][3]string{
 		{"ledger.Transaction", `450.00 "ланч" (еда)`, "ok"},
-		{"ledger.Transaction", `-100.00 "возврат" (еда)`, "invalid: invalid amount -100: must be from 0.01 to 1e+12"},
+		{"ledger.Transaction", `-100.00 "возврат" (еда)`, "invalid: invalid amount -100: must be from 0.01 to 999999999999.99"},
 		{"ledger.Transaction", `300.00 "такси" (no category)`, "invalid: category must not be empty"},
 		{"ledger.Transaction", `50.00 "кофе" (еда) on 0000-03-01`, "invalid: invalid date 0000-03-01: must be from 0001-01-02 to 9999-12-30 UTC"},
 		{"ledger.Budget", "кафе 3000.00 a month", "ok"},
-		{"ledger.Budget", "кафе 0.00", `invalid: invalid limit 0 for "кафе": must be from 0.01 to 1e+12`},
+		{"ledger.Budget", "кафе 0.00", `invalid: invalid limit 0 for "кафе": must be from 0.01 to 999999999999.99`},
 		{"ledger.Budget", "no category 1000.00", "invalid: category must not be empty"},
 	}
 	columns := regexp.MustCompile(` {2,}`)
@@ -134,7 +138,7 @@ func TestLoadBudgetsFromFile(t *testing.T) {
 			{Category: "ремонт", Limit: 100000},
 			{Category: "транспорт", Limit: 2500, Period: ledger.PeriodMonth},
 		}
-		if got := ledger.ListBudgets(); !slices.Equal(got, want) {
+		if got := mustListBudgets(t); !slices.Equal(got, want) {
 			t.Errorf("budgets = %+v, want %+v", got, want)
 		}
 	})
@@ -212,7 +216,7 @@ func TestLoadBudgetsIfExists(t *testing.T) {
 			if loaded != tt.wantLoaded {
 				t.Errorf("loadBudgetsIfExists() loaded = %v, want %v", loaded, tt.wantLoaded)
 			}
-			if got := ledger.ListBudgets(); !slices.Equal(got, tt.want) {
+			if got := mustListBudgets(t); !slices.Equal(got, tt.want) {
 				t.Errorf("budgets = %+v, want %+v", got, tt.want)
 			}
 		})
@@ -225,4 +229,34 @@ func TestLoadBudgetsIfExists(t *testing.T) {
 			t.Fatalf("loadBudgetsIfExists() = %v, %v; want false and an error", loaded, err)
 		}
 	})
+}
+
+func TestPrintReport(t *testing.T) {
+	var out strings.Builder
+	printReport(&out, ledger.ReportSummary{
+		From:       time.Date(2026, time.November, 1, 0, 0, 0, 0, time.Local),
+		To:         time.Date(2026, time.November, 30, 0, 0, 0, 0, time.Local),
+		Categories: []ledger.CategoryTotal{{Category: "еда", Amount: 1250.5}, {Category: "транспорт", Amount: 2000}},
+		Total:      3250.5,
+	})
+
+	want := "Report from 2026-11-01 to 2026-11-30:\n" +
+		"CATEGORY   SPENT\n" +
+		"еда        1250.50\n" +
+		"транспорт  2000.00\n" +
+		"total      3250.50\n"
+	if got := out.String(); got != want {
+		t.Errorf("printReport() wrote:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// mustListBudgets returns ledger.ListBudgets() and stops the test if it
+// fails.
+func mustListBudgets(t *testing.T) []ledger.Budget {
+	t.Helper()
+	list, err := ledger.ListBudgets()
+	if err != nil {
+		t.Fatalf("ledger.ListBudgets() error = %v", err)
+	}
+	return list
 }

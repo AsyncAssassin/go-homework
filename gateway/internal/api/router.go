@@ -33,6 +33,8 @@ func newAPIRouter() http.Handler {
 	mux.HandleFunc("GET /budgets", handleListBudgets)
 	mux.HandleFunc("POST /budgets", handleSetBudget)
 	mux.HandleFunc("/budgets", methodNotAllowed(allowed))
+	mux.HandleFunc("GET /reports/summary", handleReportSummary)
+	mux.HandleFunc("/reports/summary", methodNotAllowed("GET, HEAD"))
 	mux.HandleFunc("/", handleNotFound)
 	return mux
 }

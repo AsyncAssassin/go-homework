@@ -3,6 +3,7 @@ package ledger
 import (
 	"errors"
 	"math"
+	"strings"
 	"testing"
 	"time"
 )
@@ -35,6 +36,14 @@ func TestTransactionValidate(t *testing.T) {
 		{name: "infinite amount", tx: Transaction{Amount: math.Inf(1), Category: "еда"}, wantErr: ErrInvalidAmount},
 		{name: "empty category", tx: Transaction{Amount: 450}, wantErr: ErrEmptyCategory},
 		{name: "blank category", tx: Transaction{Amount: 450, Category: " \t"}, wantErr: ErrEmptyCategory},
+		// PostgreSQL stores neither NUL characters nor invalid UTF-8 in TEXT.
+		{name: "NUL in the category", tx: Transaction{Amount: 450, Category: "е\x00да"}, wantErr: ErrInvalidCategory},
+		{name: "invalid UTF-8 in the category", tx: Transaction{Amount: 450, Category: "еда\xff"}, wantErr: ErrInvalidCategory},
+		{name: "NUL in the description", tx: Transaction{Amount: 450, Category: "еда", Description: "a\x00b"}, wantErr: ErrInvalidDescription},
+		{name: "invalid UTF-8 in the description", tx: Transaction{Amount: 450, Category: "еда", Description: "\xffланч"}, wantErr: ErrInvalidDescription},
+		{name: "category of 100 letters", tx: Transaction{Amount: 450, Category: strings.Repeat("я", maxCategoryLength)}},
+		{name: "spaces around a long category do not count", tx: Transaction{Amount: 450, Category: " " + strings.Repeat("a", maxCategoryLength) + " "}},
+		{name: "category of 101 letters", tx: Transaction{Amount: 450, Category: strings.Repeat("a", maxCategoryLength+1)}, wantErr: ErrInvalidCategory},
 		{name: "zero date is filled in later", tx: Transaction{Amount: 450, Category: "еда"}},
 		{name: "zero date in a western zone", tx: Transaction{Amount: 450, Category: "еда", Date: time.Time{}.In(west)}},
 		{name: "earliest date", tx: Transaction{Amount: 450, Category: "еда", Date: minDate}},
@@ -126,6 +135,11 @@ func TestBudgetValidate(t *testing.T) {
 		{name: "infinite limit", budget: Budget{Category: "еда", Limit: math.Inf(1)}, wantErr: ErrInvalidLimit},
 		{name: "empty category", budget: Budget{Limit: 5000}, wantErr: ErrEmptyCategory},
 		{name: "blank category", budget: Budget{Category: "  ", Limit: 5000}, wantErr: ErrEmptyCategory},
+		{name: "NUL in the category", budget: Budget{Category: "е\x00да", Limit: 5000}, wantErr: ErrInvalidCategory},
+		{name: "invalid UTF-8 in the category", budget: Budget{Category: "\xffеда", Limit: 5000}, wantErr: ErrInvalidCategory},
+		{name: "category of 100 letters", budget: Budget{Category: strings.Repeat("я", maxCategoryLength), Limit: 5000}},
+		{name: "category of 101 letters", budget: Budget{Category: strings.Repeat("я", maxCategoryLength+1), Limit: 5000}, wantErr: ErrInvalidCategory},
+		{name: "the category text is checked before the limit", budget: Budget{Category: "е\x00да", Limit: -1}, wantErr: ErrInvalidCategory},
 		{name: "unknown period", budget: Budget{Category: "еда", Limit: 5000, Period: "week"}, wantErr: ErrInvalidPeriod},
 		{name: "the category is checked first", budget: Budget{Limit: -1, Period: "week"}, wantErr: ErrEmptyCategory},
 	}
@@ -187,7 +201,7 @@ func TestBudgetRule(t *testing.T) {
 	if _, err := AddTransaction(Transaction{Amount: 4500, Category: "еда", Description: "продукты"}); err != nil {
 		t.Fatalf("AddTransaction() within the limit error = %v, want nil", err)
 	}
-	if got := len(ListTransactions()); got != 1 {
+	if got := len(mustListTransactions(t)); got != 1 {
 		t.Fatalf("ListTransactions() has %d transactions, want 1", got)
 	}
 
@@ -196,7 +210,7 @@ func TestBudgetRule(t *testing.T) {
 	if !errors.Is(err, ErrBudgetExceeded) {
 		t.Errorf("AddTransaction() over the limit error = %v, want %v", err, ErrBudgetExceeded)
 	}
-	if got := len(ListTransactions()); got != 1 {
+	if got := len(mustListTransactions(t)); got != 1 {
 		t.Errorf("ListTransactions() has %d transactions after the rejected one, want 1", got)
 	}
 }

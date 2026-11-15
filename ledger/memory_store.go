@@ -2,6 +2,7 @@ package ledger
 
 import (
 	"cmp"
+	"context"
 	"slices"
 	"strings"
 	"sync"
@@ -12,7 +13,7 @@ import (
 // concurrent use: every method holds mu for the whole operation, so the
 // budget check and the insert of a transaction cannot interleave with
 // another change, and two transactions cannot both use the same remaining
-// limit.
+// limit. Its methods never fail.
 type memoryStore struct {
 	mu           sync.Mutex
 	transactions []Transaction     // in the order they were added: ID i is at index i-1
@@ -23,17 +24,7 @@ func newMemoryStore() *memoryStore {
 	return &memoryStore{budgets: map[string]Budget{}}
 }
 
-// reset removes all transactions and budgets.
-func (s *memoryStore) reset() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.transactions = nil
-	s.budgets = map[string]Budget{}
-}
-
-// addTransaction stores tx with the next ID if it fits into the budget of
-// its category and returns the stored transaction.
-func (s *memoryStore) addTransaction(tx Transaction) (Transaction, error) {
+func (s *memoryStore) addTransaction(_ context.Context, tx Transaction) (Transaction, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if b, ok := s.budgets[tx.Category]; ok {
@@ -46,9 +37,7 @@ func (s *memoryStore) addTransaction(tx Transaction) (Transaction, error) {
 	return tx, nil
 }
 
-// listTransactions returns a copy of the transactions, newest first: by
-// date, and by ID for equal dates.
-func (s *memoryStore) listTransactions() []Transaction {
+func (s *memoryStore) listTransactions(context.Context) ([]Transaction, error) {
 	s.mu.Lock()
 	list := slices.Clone(s.transactions)
 	s.mu.Unlock()
@@ -59,29 +48,25 @@ func (s *memoryStore) listTransactions() []Transaction {
 		}
 		return cmp.Compare(b.ID, a.ID)
 	})
-	return list
+	return list, nil
 }
 
-// setBudgets stores the budgets at once, each replacing the budget of its
-// category.
-func (s *memoryStore) setBudgets(list ...Budget) {
+func (s *memoryStore) setBudgets(_ context.Context, list ...Budget) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, b := range list {
 		s.budgets[b.Category] = b
 	}
+	return nil
 }
 
-// listBudgets returns all budgets sorted by category.
-func (s *memoryStore) listBudgets() []Budget {
+func (s *memoryStore) listBudgets(context.Context) ([]Budget, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.sortedBudgets()
+	return s.sortedBudgets(), nil
 }
 
-// budgetUsage returns every budget, sorted by category, with the amount
-// spent within its period that contains date.
-func (s *memoryStore) budgetUsage(date time.Time) []BudgetUsage {
+func (s *memoryStore) budgetUsage(_ context.Context, date time.Time) ([]BudgetUsage, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	list := s.sortedBudgets()
@@ -93,7 +78,31 @@ func (s *memoryStore) budgetUsage(date time.Time) []BudgetUsage {
 			Spent:       spentIn(s.transactions, b, date),
 		}
 	}
-	return usage
+	return usage, nil
+}
+
+func (s *memoryStore) reportSummary(_ context.Context, from, to time.Time) ([]CategoryTotal, error) {
+	s.mu.Lock()
+	sums := map[string]float64{}
+	for _, tx := range s.transactions {
+		if !tx.Date.Before(from) && !tx.Date.After(to) {
+			sums[tx.Category] += tx.Amount
+		}
+	}
+	s.mu.Unlock()
+
+	totals := make([]CategoryTotal, 0, len(sums))
+	for category, amount := range sums {
+		totals = append(totals, CategoryTotal{Category: category, Amount: roundToKopecks(amount)})
+	}
+	slices.SortFunc(totals, func(a, b CategoryTotal) int {
+		return strings.Compare(a.Category, b.Category)
+	})
+	return totals, nil
+}
+
+func (s *memoryStore) close() error {
+	return nil
 }
 
 // sortedBudgets returns the budgets sorted by category. The caller must

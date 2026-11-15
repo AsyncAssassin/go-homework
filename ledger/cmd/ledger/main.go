@@ -1,15 +1,19 @@
-// Command ledger is the console demo of the ledger package. It keeps
-// transactions and category budgets in memory and shows how budgets limit
-// new transactions.
+// Command ledger is the console client of the ledger package. By default it
+// connects to PostgreSQL and Redis, as the gateway does, and prints the
+// budgets, the transactions and the report of the current month stored
+// there. With -demo it runs the console demo of homeworks 2-4 in memory and
+// does not touch the database.
 package main
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
 	"os"
 	"strings"
 	"text/tabwriter"
@@ -19,9 +23,64 @@ import (
 )
 
 func main() {
-	budgetsPath := flag.String("budgets", "budgets.json", "path to the JSON file with budgets")
+	demo := flag.Bool("demo", false, "run the in-memory demo of homeworks 2-4 instead of reading the database")
+	budgetsPath := flag.String("budgets", "budgets.json", "path to the JSON file with budgets for -demo")
 	flag.Parse()
 
+	if *demo {
+		if err := runDemo(*budgetsPath); err != nil {
+			fmt.Fprintln(os.Stderr, "Ledger demo failed:", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if err := showStoredData(context.Background(), os.Stdout); err != nil {
+		log.Fatalf("Ledger service failed: %v", err)
+	}
+}
+
+// showStoredData connects to PostgreSQL and Redis and writes the budgets,
+// the transactions and the report of the current month to w.
+func showStoredData(ctx context.Context, w io.Writer) error {
+	if err := ledger.Connect(ctx); err != nil {
+		return err
+	}
+	defer func() {
+		if err := ledger.Close(); err != nil {
+			log.Printf("close the ledger: %v", err)
+		}
+	}()
+	log.Print("Ledger service started")
+
+	now := time.Now()
+	if err := printBudgets(w, now); err != nil {
+		return err
+	}
+	fmt.Fprintln(w)
+	if err := printTransactions(w); err != nil {
+		return err
+	}
+
+	y, m, _ := now.Date()
+	from, to := ledger.Day(y, m, 1), ledger.Day(y, m+1, 0)
+	// The first request fills the cache and the second one is answered from
+	// it: the log shows "report cache miss" and then "report cache hit".
+	var report ledger.ReportSummary
+	for range 2 {
+		var err error
+		if report, err = ledger.GetReportSummary(ctx, from, to); err != nil {
+			return err
+		}
+	}
+	fmt.Fprintln(w)
+	printReport(w, report)
+	return nil
+}
+
+// runDemo runs the console demo of homeworks 2-4 in memory: it sets
+// budgets, loads more from the JSON file at budgetsPath if it exists and
+// shows how budgets limit new transactions.
+func runDemo(budgetsPath string) error {
 	fmt.Println("Ledger service started")
 
 	// Initial budgets are set in code, then budgets.json adds and updates some.
@@ -30,19 +89,17 @@ func main() {
 		{Category: "транспорт", Limit: 2000, Period: ledger.PeriodMonth},
 	} {
 		if _, err := ledger.SetBudget(b); err != nil {
-			fmt.Fprintln(os.Stderr, "Cannot set budget:", err)
-			os.Exit(1)
+			return fmt.Errorf("set budget: %w", err)
 		}
 	}
-	loaded, err := loadBudgetsIfExists(*budgetsPath)
+	loaded, err := loadBudgetsIfExists(budgetsPath)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "Cannot load budgets:", err)
-		os.Exit(1)
+		return err
 	}
 	if loaded {
-		fmt.Printf("Budgets loaded from %s\n", *budgetsPath)
+		fmt.Printf("Budgets loaded from %s\n", budgetsPath)
 	} else {
-		fmt.Fprintf(os.Stderr, "Budgets file %s not found, using the built-in budgets (pass -budgets <path> to load a file)\n", *budgetsPath)
+		fmt.Fprintf(os.Stderr, "Budgets file %s not found, using the built-in budgets (pass -budgets <path> to load a file)\n", budgetsPath)
 	}
 	// One clock reading for the whole demo, so a run at midnight cannot split
 	// it between two months.
@@ -50,7 +107,9 @@ func main() {
 	lastMonth := now.AddDate(0, 0, -now.Day()) // the last day of the previous month
 
 	fmt.Println()
-	printBudgets(os.Stdout, now)
+	if err := printBudgets(os.Stdout, now); err != nil {
+		return err
+	}
 
 	fmt.Println("\nAdding transactions:")
 	for _, tx := range []ledger.Transaction{
@@ -71,12 +130,17 @@ func main() {
 	showLoadErrors()
 
 	fmt.Println()
-	printTransactions(os.Stdout, ledger.ListTransactions())
+	if err := printTransactions(os.Stdout); err != nil {
+		return err
+	}
 	fmt.Println()
-	printBudgets(os.Stdout, now)
+	if err := printBudgets(os.Stdout, now); err != nil {
+		return err
+	}
 
 	fmt.Println("\nValidation through the Validatable interface:")
 	showValidation(os.Stdout)
+	return nil
 }
 
 // loadBudgetsIfExists loads budgets from the JSON file at path and reports
@@ -187,9 +251,14 @@ func categoryOrNone(category string) string {
 	return category
 }
 
-// printTransactions writes transactions to w as a table. Dates are shown in
-// the local time zone, the one budget periods are counted in.
-func printTransactions(w io.Writer, txs []ledger.Transaction) {
+// printTransactions writes the stored transactions to w as a table, newest
+// first. Dates are shown in the local time zone, the one budget periods are
+// counted in.
+func printTransactions(w io.Writer) error {
+	txs, err := ledger.ListTransactions()
+	if err != nil {
+		return err
+	}
 	fmt.Fprintf(w, "Transactions (%d):\n", len(txs))
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "ID\tDATE\tCATEGORY\tAMOUNT\tDESCRIPTION")
@@ -197,13 +266,16 @@ func printTransactions(w io.Writer, txs []ledger.Transaction) {
 		fmt.Fprintf(tw, "%d\t%s\t%s\t%.2f\t%s\n",
 			tx.ID, tx.Date.In(time.Local).Format(time.DateOnly), tx.Category, tx.Amount, tx.Description)
 	}
-	tw.Flush()
+	return tw.Flush()
 }
 
 // printBudgets writes every budget with the amounts spent and left to w.
 // The amounts are for the budget period that contains now.
-func printBudgets(w io.Writer, now time.Time) {
-	list := ledger.ListBudgetUsage(now)
+func printBudgets(w io.Writer, now time.Time) error {
+	list, err := ledger.ListBudgetUsage(now)
+	if err != nil {
+		return err
+	}
 	fmt.Fprintf(w, "Budgets (%d):\n", len(list))
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "CATEGORY\tPERIOD\tLIMIT\tSPENT\tLEFT")
@@ -215,6 +287,19 @@ func printBudgets(w io.Writer, now time.Time) {
 		fmt.Fprintf(tw, "%s\t%s\t%.2f\t%.2f\t%.2f\n",
 			u.Budget.Category, period, u.Budget.Limit, u.Spent, remaining(u.Budget.Limit, u.Spent))
 	}
+	return tw.Flush()
+}
+
+// printReport writes the amounts spent in every category of the report and
+// their total to w.
+func printReport(w io.Writer, r ledger.ReportSummary) {
+	fmt.Fprintf(w, "Report from %s to %s:\n", r.From.Format(time.DateOnly), r.To.Format(time.DateOnly))
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "CATEGORY\tSPENT")
+	for _, c := range r.Categories {
+		fmt.Fprintf(tw, "%s\t%.2f\n", c.Category, c.Amount)
+	}
+	fmt.Fprintf(tw, "total\t%.2f\n", r.Total)
 	tw.Flush()
 }
 

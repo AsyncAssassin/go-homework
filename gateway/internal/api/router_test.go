@@ -34,6 +34,7 @@ func TestRouter(t *testing.T) {
 		{name: "HEAD transactions", method: http.MethodHead, path: "/api/transactions", wantStatus: http.StatusOK},
 		{name: "PUT transactions", method: http.MethodPut, path: "/api/transactions", wantStatus: http.StatusMethodNotAllowed, wantBody: notAllowed, wantAllow: "GET, HEAD, POST"},
 		{name: "DELETE budgets", method: http.MethodDelete, path: "/api/budgets", wantStatus: http.StatusMethodNotAllowed, wantBody: notAllowed, wantAllow: "GET, HEAD, POST"},
+		{name: "POST report", method: http.MethodPost, path: "/api/reports/summary", wantStatus: http.StatusMethodNotAllowed, wantBody: notAllowed, wantAllow: "GET, HEAD"},
 		{name: "unknown path", method: http.MethodGet, path: "/unknown", wantStatus: http.StatusNotFound, wantBody: notFound},
 		{name: "api without a slash", method: http.MethodGet, path: "/api", wantStatus: http.StatusNotFound, wantBody: notFound},
 		{name: "api root", method: http.MethodGet, path: "/api/", wantStatus: http.StatusNotFound, wantBody: notFound},

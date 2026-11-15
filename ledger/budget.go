@@ -45,6 +45,22 @@ func (p Period) label(t time.Time) string {
 	return t.In(time.Local).Format(periodLayouts[p])
 }
 
+// bounds returns the start of the period of p that contains t and the
+// start of the next period: the starts of their first days in the local
+// time zone, see Day. The periods are the same as those of label. ok is
+// false for PeriodNone, which has no bounds.
+func (p Period) bounds(t time.Time) (start, end time.Time, ok bool) {
+	y, m, _ := t.In(time.Local).Date()
+	switch p {
+	case PeriodMonth:
+		return Day(y, m, 1), Day(y, m+1, 1), true
+	case PeriodYear:
+		return Day(y, time.January, 1), Day(y+1, time.January, 1), true
+	default:
+		return time.Time{}, time.Time{}, false
+	}
+}
+
 // valid reports whether p is one of the supported periods.
 func (p Period) valid() bool {
 	_, ok := periodLayouts[p]
@@ -82,17 +98,18 @@ func (e *BudgetExceededError) Is(target error) bool {
 	return target == ErrBudgetExceeded
 }
 
-// Validate reports whether b can be stored. The category must not be blank,
-// the limit must be from 0.01 to 1e12, and the period must be "month",
-// "year" or empty. Case and surrounding spaces of the category and the
-// period do not matter.
+// Validate reports whether b can be stored. The category must not be blank
+// and must be at most 100 characters of valid UTF-8 without NUL characters,
+// the limit must be from 0.01 to 999999999999.99, and the period must be
+// "month", "year" or empty. Case and surrounding spaces of the category and
+// the period do not matter.
 func (b Budget) Validate() error {
-	category := normalizeCategory(b.Category)
-	if category == "" {
-		return ErrEmptyCategory
+	if err := checkCategory(b.Category); err != nil {
+		return err
 	}
+	category := normalizeCategory(b.Category)
 	if !inAmountRange(b.Limit) {
-		return fmt.Errorf("%w %v for %q: must be from %g to %g",
+		return fmt.Errorf("%w %v for %q: must be from %.2f to %.2f",
 			ErrInvalidLimit, b.Limit, category, minAmount, maxAmount)
 	}
 	if !normalizePeriod(b.Period).valid() {
@@ -113,13 +130,21 @@ func SetBudget(b Budget) (Budget, error) {
 		return Budget{}, err
 	}
 	b = normalizeBudget(b)
-	store.setBudgets(b)
+
+	ctx, cancel := queryContext()
+	defer cancel()
+	if err := store.setBudgets(ctx, b); err != nil {
+		return Budget{}, err
+	}
 	return b, nil
 }
 
-// ListBudgets returns all budgets sorted by category.
-func ListBudgets() []Budget {
-	return store.listBudgets()
+// ListBudgets returns all budgets sorted by category. After Connect the
+// list is cached in Redis for 30 seconds or until a budget changes.
+func ListBudgets() ([]Budget, error) {
+	ctx, cancel := queryContext()
+	defer cancel()
+	return store.listBudgets(ctx)
 }
 
 // BudgetUsage is a budget with the amount spent within one of its periods.
@@ -131,8 +156,10 @@ type BudgetUsage struct {
 
 // ListBudgetUsage returns every budget, sorted by category, with the amount
 // spent within its period that contains date.
-func ListBudgetUsage(date time.Time) []BudgetUsage {
-	return store.budgetUsage(date)
+func ListBudgetUsage(date time.Time) ([]BudgetUsage, error) {
+	ctx, cancel := queryContext()
+	defer cancel()
+	return store.budgetUsage(ctx, date)
 }
 
 // LoadBudgets reads a JSON array of budgets from r, for example
@@ -176,7 +203,11 @@ func LoadBudgets(r io.Reader) error {
 		list[i] = b
 	}
 
-	store.setBudgets(list...)
+	ctx, cancel := queryContext()
+	defer cancel()
+	if err := store.setBudgets(ctx, list...); err != nil {
+		return fmt.Errorf("load budgets: %w", err)
+	}
 	return nil
 }
 
@@ -223,5 +254,7 @@ func spentIn(txs []Transaction, b Budget, date time.Time) float64 {
 			total += tx.Amount
 		}
 	}
-	return total
+	// Float sums like 0.1+0.2 are not exactly 0.3; PostgreSQL sums the
+	// amounts exactly.
+	return roundToKopecks(total)
 }

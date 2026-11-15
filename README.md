@@ -8,12 +8,14 @@
 | 4 | ООП: валидация через интерфейс в Ledger | `ledger/` |
 | 5 | Веб-приложения: REST API в Gateway | `gateway/`, `ledger/` |
 | 6 | Тестирование | `gateway/`, `ledger/` |
+| 7 | Базы данных: PostgreSQL и Redis | `ledger/`, `gateway/`, `compose.yaml` |
 
 Состояние репозитория на момент сдачи каждого ДЗ отмечено тегом `hwN`.
 
 ## Требования
 
 - Go 1.22+ (проверено на 1.22.12 и 1.26.5)
+- С ДЗ 7 для Gateway и Ledger: Docker с Compose (PostgreSQL и Redis) и goose v3.30.1 для миграций
 
 Каждая папка — отдельный Go-модуль, команды ниже запускаются из её каталога.
 
@@ -70,14 +72,16 @@ Content-Length: 19
 - `AddTransaction(tx Transaction) error` — проверяет и добавляет транзакцию: сумма от 0.01 до 10¹², категория не пустая;
 - `ListTransactions() []Transaction` — возвращает копию списка.
 
-С ДЗ 5 ledger стал пакетом, который импортирует Gateway, демо переехало в `ledger/cmd/ledger`, а `AddTransaction` возвращает ещё и сохранённую транзакцию. Запуск демо: `cd ledger && go run ./cmd/ledger`. Оно показывает также бюджеты из ДЗ 3 и проверку через интерфейс из ДЗ 4, примеры вывода приведены в их разделах. Состояние на момент сдачи ДЗ 2 сохранено в теге [`hw2`](https://github.com/AsyncAssassin/go-homework/tree/hw2).
+С ДЗ 5 ledger стал пакетом, который импортирует Gateway, демо переехало в `ledger/cmd/ledger`, а `AddTransaction` возвращает ещё и сохранённую транзакцию. Запуск демо: `cd ledger && go run ./cmd/ledger -demo` (до ДЗ 7 без флага). Оно показывает также бюджеты из ДЗ 3 и проверку через интерфейс из ДЗ 4, примеры вывода приведены в их разделах. С ДЗ 7 демо работает в памяти, как раньше, а основное хранилище ledger находится в PostgreSQL, и верхняя граница суммы равна 999 999 999 999.99. Состояние на момент сдачи ДЗ 2 сохранено в теге [`hw2`](https://github.com/AsyncAssassin/go-homework/tree/hw2).
 
 ## ДЗ 3. Ввод-вывод и обработка ошибок: бюджеты в Ledger
 
 ```sh
 cd ledger
-go run ./cmd/ledger   # другой файл бюджетов: go run ./cmd/ledger -budgets path/to/file.json
+go run ./cmd/ledger -demo   # другой файл бюджетов: go run ./cmd/ledger -demo -budgets path/to/file.json
 ```
+
+С ДЗ 7 демо запускается флагом `-demo`, а без флага программа показывает данные из PostgreSQL (см. [README Ledger](ledger/README.md#консольная-программа)).
 
 Сервис задаёт начальные бюджеты в коде через `SetBudget`, затем загружает `budgets.json` из текущего каталога (`os.Open` + `bufio.NewReader`) и прогоняет демо-сценарии: транзакции в пределах лимита, сверх лимита, без бюджета, с нулевой суммой и загрузку бюджетов из битых источников.
 
@@ -128,12 +132,12 @@ Adding transactions:
   added    "хлеб и молоко" 249.50 (еда)
   added    "ресторан в прошлом месяце" 500.00 (еда)
   added    "лекарства" 700.00 (здоровье)
-  rejected "пустой чек": invalid amount 0: must be from 0.01 to 1e+12
+  rejected "пустой чек": invalid amount 0: must be from 0.01 to 999999999999.99
 
 Budget loading errors:
   broken JSON: load budgets: decode JSON: unexpected EOF
   wrong type: load budgets: decode JSON: json: cannot unmarshal string into Go struct field Budget.limit of type float64
-  invalid limit: load budgets: budget #2: invalid limit -5 for "такси": must be from 0.01 to 1e+12
+  invalid limit: load budgets: budget #2: invalid limit -5 for "такси": must be from 0.01 to 999999999999.99
   invalid period: load budgets: budget #1: invalid period "week" for "кафе": must be "month", "year" or empty
   missing file: load budgets: open no-such-dir/budgets.json: no such file or directory
 
@@ -160,7 +164,7 @@ CATEGORY     PERIOD    LIMIT      SPENT    LEFT
 
 ```sh
 cd ledger
-go run ./cmd/ledger
+go run ./cmd/ledger -demo
 ```
 
 Проверка данных отделена от бизнес-логики интерфейсом `Validatable` (`ledger/validate.go`):
@@ -173,8 +177,8 @@ type Validatable interface {
 
 ### Что реализовано
 
-- `Transaction.Validate()`: сумма от 0.01 до 10¹² (ноль, отрицательные суммы, NaN и бесконечность не проходят), категория не пустая, заданная дата от 2 января 1 года до 30 декабря 9999 года по UTC. Запас в сутки нужен, чтобы в любом часовом поясе дата записывалась как `YYYY-MM-DD` с годом от 1 до 9999, а результат проверки зависел только от момента времени. Пустая дата допустима: при добавлении подставляется текущая.
-- `Budget.Validate()`: категория не пустая, лимит от 0.01 до 10¹², период `month`, `year` или пусто.
+- `Transaction.Validate()`: сумма от 0.01 до 999 999 999 999.99, до ДЗ 7 до 10¹² (ноль, отрицательные суммы, NaN и бесконечность не проходят), категория не пустая, заданная дата от 2 января 1 года до 30 декабря 9999 года по UTC. Запас в сутки нужен, чтобы в любом часовом поясе дата записывалась как `YYYY-MM-DD` с годом от 1 до 9999, а результат проверки зависел только от момента времени. Пустая дата допустима: при добавлении подставляется текущая. С ДЗ 7 категория не длиннее 100 символов, а в категории и описании нет нулевого байта и неверных последовательностей UTF-8: такой текст PostgreSQL не сохранит.
+- `Budget.Validate()`: категория не пустая, с ДЗ 7 к ней применяются те же правила длины и текста, лимит от 0.01 до 999 999 999 999.99 (до ДЗ 7 до 10¹²), период `month`, `year` или пусто. Граница уменьшилась, чтобы значение помещалось в столбец `NUMERIC(14,2)`.
 - `Validate()` только возвращает ошибку и ничего не логирует, результат печатает вызывающий код.
 - `AddTransaction`, `SetBudget` и `LoadBudgets` вызывают `Validate()` до сохранения. Если он вернул ошибку, объект не добавляется, а ошибка возвращается вызывающему коду. Проверки бюджетов из ДЗ 3 работают как раньше.
 - `CheckValid(v Validatable) error` вызывает `v.Validate()` и одинаково работает с транзакциями, бюджетами и указателями на них. Для `nil`, в том числе для nil-указателя вроде `(*Transaction)(nil)`, возвращает ошибку `nothing to validate`, а не панику.
@@ -186,11 +190,11 @@ type Validatable interface {
 ```text
 Validation through the Validatable interface:
   ledger.Transaction  450.00 "ланч" (еда)               ok
-  ledger.Transaction  -100.00 "возврат" (еда)           invalid: invalid amount -100: must be from 0.01 to 1e+12
+  ledger.Transaction  -100.00 "возврат" (еда)           invalid: invalid amount -100: must be from 0.01 to 999999999999.99
   ledger.Transaction  300.00 "такси" (no category)      invalid: category must not be empty
   ledger.Transaction  50.00 "кофе" (еда) on 0000-03-01  invalid: invalid date 0000-03-01: must be from 0001-01-02 to 9999-12-30 UTC
   ledger.Budget       кафе 3000.00 a month              ok
-  ledger.Budget       кафе 0.00                         invalid: invalid limit 0 for "кафе": must be from 0.01 to 1e+12
+  ledger.Budget       кафе 0.00                         invalid: invalid limit 0 for "кафе": must be from 0.01 to 999999999999.99
   ledger.Budget       no category 1000.00               invalid: category must not be empty
 ```
 
@@ -203,7 +207,7 @@ cd gateway
 go run .              # другой адрес: go run . -addr :9090
 ```
 
-Gateway импортирует модуль `ledger` из этого же репозитория: в `gateway/go.mod` указаны `require` и `replace github.com/AsyncAssassin/go-homework/ledger => ../ledger`, go.work не нужен. Хранилище, как в ДЗ 2-4, в памяти: после остановки сервера данные пропадают.
+Gateway импортирует модуль `ledger` из этого же репозитория: в `gateway/go.mod` указаны `require` и `replace github.com/AsyncAssassin/go-homework/ledger => ../ledger`, go.work не нужен. В ДЗ 5 хранилище было в памяти, как в ДЗ 2-4, и данные пропадали после остановки сервера. С ДЗ 7 они хранятся в PostgreSQL, поэтому перед запуском нужны PostgreSQL, Redis и миграции, см. [ДЗ 7](#дз-7-базы-данных-postgresql-и-redis). Состояние на момент сдачи ДЗ 5 сохранено в теге [`hw5`](https://github.com/AsyncAssassin/go-homework/tree/hw5).
 
 HTTP-слой находится в `gateway/internal/api`:
 - `dto.go`: `CreateTransactionRequest`, `TransactionResponse`, `CreateBudgetRequest`, `BudgetResponse` и функции-преобразователи между DTO и `ledger.Transaction`, `ledger.Budget`;
@@ -221,9 +225,10 @@ HTTP-слой находится в `gateway/internal/api`:
 | `GET /api/transactions` | нет | 200 и массив транзакций от новых к старым, `[]`, если их нет |
 | `POST /api/budgets` | `{"category", "limit", "period"}` | 201 и сохранённый бюджет, новый или обновлённый; 400 |
 | `GET /api/budgets` | нет | 200 и массив бюджетов по алфавиту категорий, `[]`, если их нет |
+| `GET /api/reports/summary?from=YYYY-MM-DD&to=YYYY-MM-DD` | нет | с ДЗ 7: 200 и траты по категориям за период; 400, см. [README Gateway](gateway/README.md#отчёт) |
 
 Поля запросов:
-- `amount` и `limit`: число от 0.01 до 10¹², округляется до копеек;
+- `amount` и `limit`: число от 0.01 до 999 999 999 999.99 (до ДЗ 7 до 10¹²), округляется до копеек;
 - `category`: непустая строка, регистр и пробелы по краям не важны;
 - `description`: необязательно;
 - `date`: `YYYY-MM-DD`, необязательно, без даты берётся сегодняшняя. Дата считается в локальном часовом поясе, как и периоды бюджетов;
@@ -242,7 +247,7 @@ HTTP-слой находится в `gateway/internal/api`:
 | 413 | тело запроса больше 1 МБ |
 | 500 | внутренняя ошибка: клиент получает `{"error":"internal server error"}`, подробности пишутся в лог |
 
-Проверка бюджета и добавление транзакции выполняются в ledger под одной блокировкой, поэтому параллельные запросы не превышают лимит вместе.
+Проверка бюджета и добавление транзакции выполняются в ledger под одной блокировкой, поэтому параллельные запросы не превышают лимит вместе. С ДЗ 7 ту же роль играет транзакция PostgreSQL, которая блокирует строку бюджета.
 
 ### Проверка через curl
 
@@ -275,7 +280,7 @@ curl -i http://localhost:8080/api/budgets
 201 {"category":"еда","limit":5000,"period":"month"}
 201 {"id":1,"amount":450,"category":"еда","description":"ланч","date":"2025-09-10"}
 409 {"error":"budget exceeded"}
-400 {"error":"invalid amount 0: must be from 0.01 to 1e+12"}
+400 {"error":"invalid amount 0: must be from 0.01 to 999999999999.99"}
 200 [{"id":1,"amount":450,"category":"еда","description":"ланч","date":"2025-09-10"}]
 200 [{"category":"еда","limit":5000,"period":"month"}]
 ```
@@ -296,6 +301,8 @@ Middleware `Logging` пишет в консоль метод, путь, стат
 2026/11/14 14:29:52 GET /api/budgets 200 16.542µs
 ```
 
+С ДЗ 7 перед этими строками лог показывает подключения к PostgreSQL и Redis, а запросы отчёта отмечаются строками `report cache miss` и `report cache hit` (пример в [README Gateway](gateway/README.md#лог)).
+
 Тесты HTTP-слоя находятся в `gateway/internal/api`: обработчики проверяются через `httptest` вместе с маршрутами и middleware.
 
 ## ДЗ 6. Тестирование
@@ -310,9 +317,11 @@ go tool cover -func=cover.out | tail -1      # итоговый процент
 
 В корне репозитория нет `go.mod`, поэтому тесты и покрытие запускаются в каталоге каждого модуля. Файлы `cover.out` и `cover.html` в Git не попадают.
 
+С ДЗ 7 часть тестов ledger работает с PostgreSQL и Redis и без них пропускается, порядок запуска описан в [README Ledger](ledger/README.md#тесты).
+
 ### Покрытие тестами
 
-Измерено командами выше:
+Измерено командами выше на момент сдачи ДЗ 6, тег [`hw6`](https://github.com/AsyncAssassin/go-homework/tree/hw6). Покрытие с ДЗ 7 приведено в [README Ledger](ledger/README.md#покрытие-тег-hw7) и [README Gateway](gateway/README.md#тесты).
 
 | Пакет | Покрытие |
 |-------|----------|
@@ -323,7 +332,7 @@ go tool cover -func=cover.out | tail -1      # итоговый процент
 | Модуль `ledger` целиком | 81.5% |
 | Модуль `gateway` целиком | 92.1% |
 
-Без тестов остаются функции `main` и печать консольного демо: их проверяет запуск программ (`go run ./cmd/ledger`, `go run .` и curl из раздела ДЗ 5). В `gateway/internal/api` не покрыты ответы 500 на прочие ошибки ledger: обработчики проверяют данные через `Validate()` до вызова ledger, а хранилище в памяти других ошибок не возвращает. Эти ветки понадобятся, когда ledger начнёт работать с базой данных. Также не покрыт отказ для даты `0001-01-01`, который срабатывает только в поясе UTC.
+Без тестов остаются функции `main` и печать консольного демо: их проверяет запуск программ (`go run ./cmd/ledger -demo`, `go run .` и curl из раздела ДЗ 5). В `gateway/internal/api` на момент ДЗ 6 не были покрыты ответы 500 на прочие ошибки ledger: обработчики проверяют данные через `Validate()` до вызова ledger, а хранилище в памяти других ошибок не возвращает. С ДЗ 7 эти ветки проверяет `TestLedgerError`. Также на момент ДЗ 6 не был покрыт отказ для даты `0001-01-01`, который срабатывал только в поясе UTC. С ДЗ 7 он срабатывает в любом поясе, его проверяют `TestCreateTransaction` и `TestReportSummary`.
 
 ### Что проверяют тесты
 
@@ -341,6 +350,32 @@ go tool cover -func=cover.out | tail -1      # итоговый процент
 
 Табличные unit-тесты `Validate`, `CheckValid` и преобразователей DTO не трогают общие данные, поэтому они и их подтесты помечены `t.Parallel()`. Тесты, которые меняют хранилище ledger или стандартный логгер, идут последовательно. Независимость от порядка запуска проверяет `go test -race -shuffle=on -count=3 ./...`.
 
+## ДЗ 7. Базы данных: PostgreSQL и Redis
+
+Ledger хранит транзакции и бюджеты в PostgreSQL вместо памяти, а отчёты кеширует в Redis на 30 секунд. Gateway отвечает на те же HTTP-эндпоинты, что и в ДЗ 5, но данные теперь читаются из PostgreSQL и пишутся туда же, поэтому переживают перезапуск.
+
+```sh
+docker compose up -d --wait   # PostgreSQL 16 и Redis 7 из compose.yaml
+cd ledger
+goose -dir migrations postgres 'postgres://postgres:postgres@localhost:5432/cashapp?sslmode=disable' up
+cd ../gateway
+go run .
+```
+
+Подробности:
+- [README Ledger](ledger/README.md): создание базы и миграции goose (up и down), схема, переменные `DATABASE_URL`, `DB_*` и `REDIS_*`, пул соединений, хранение в PostgreSQL, кеш в Redis, консольная программа, интеграционные тесты и известные уязвимости зависимостей;
+- [README Gateway](gateway/README.md): запуск, отличия ответов от ДЗ 6, эндпоинты, новый отчёт `GET /api/reports/summary`, проверка через curl с записью в таблицы, перезапуском и двумя запросами отчёта подряд.
+
+### Что реализовано
+
+- Миграции goose в `ledger/migrations/`: таблицы `budgets` и `expenses` по условию, столбец `period` для периодов бюджетов из ДЗ 3 и индекс `(category, date)`.
+- `ledger/internal/db`: `sql.Open("pgx", dsn)` и `Ping`, пул `SetMaxOpenConns(10)`, `SetMaxIdleConns(5)` и `SetConnMaxLifetime(30 * time.Minute)`. Строка подключения берётся из `DATABASE_URL` или из `DB_*`. При ошибке программа выводит понятное сообщение и завершается с кодом 1, при успехе пишет подключение в лог. Ошибка разбора строки подключения не цитирует её, чтобы не показать пароль. Если миграции не применены, программа не запускается и подсказывает команду goose.
+- `SetBudget` выполняет UPSERT, `ListBudgets` и `ListTransactions` читают из таблиц. `AddTransaction` проверяет лимит и вставляет запись в одной транзакции БД, при превышении лимита возвращает ошибку и ничего не вставляет. `LoadBudgets` сохраняет бюджеты в порядке категорий, поэтому параллельные загрузки не попадают во взаимоблокировку.
+- Дни транзакций и отчётов считаются в местном часовом поясе через `ledger.Day`, в том числе в дни без полуночи при переходе на летнее время.
+- `ledger/internal/cache`: клиент go-redis с настройками из `REDIS_ADDR`, `REDIS_DB`, `REDIS_PASSWORD` и записью в лог о подключении. `GetReportSummary(ctx, from, to)` берёт отчёт из Redis или считает его в PostgreSQL и сохраняет на 30 секунд, в логе видно `report cache miss` и `report cache hit`. Список бюджетов кешируется под ключом `budgets:all` на 30 секунд и сбрасывается после `SetBudget` и `LoadBudgets`. Каждый запрос к Redis ограничен 0.5 секунды без повторов: если Redis завис или недоступен, ledger пишет ошибку в лог и работает с PostgreSQL.
+- Gateway подключает ledger при старте, корректно останавливается по `Ctrl+C` (повторный `Ctrl+C` завершает его сразу), отвечает 500 при ошибке хранилища и отдаёт отчёт по `GET /api/reports/summary`.
+- Внешние зависимости: `github.com/jackc/pgx/v5` v5.7.4 и `github.com/redis/go-redis/v9` v9.18.0, последние версии, которые работают с Go 1.22.
+
 ## Тесты
 
 В каталоге модуля: `go test ./...`. Все модули сразу, из корня репозитория:
@@ -348,3 +383,5 @@ go tool cover -func=cover.out | tail -1      # итоговый процент
 ```sh
 for m in hw1 gateway ledger; do (cd "$m" && go test ./...); done
 ```
+
+Интеграционные тесты ledger с PostgreSQL и Redis выполняются, если заданы `LEDGER_TEST_DATABASE_URL` и `LEDGER_TEST_REDIS_ADDR`, см. [README Ledger](ledger/README.md#тесты).
