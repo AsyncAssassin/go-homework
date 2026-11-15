@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -11,21 +12,22 @@ import (
 	"time"
 
 	"github.com/AsyncAssassin/go-homework/ledger"
+	"github.com/AsyncAssassin/go-homework/ledger/domain"
+	"github.com/AsyncAssassin/go-homework/ledger/service"
 )
 
-// The handlers share the ledger storage, so these tests reset it and do not
-// run in parallel.
+// Each flow owns an independent service. Log capture tests remain sequential.
 
 // serve sends a request with the given body ("" for none) through the
 // router and returns the recorded response.
-func serve(t *testing.T, method, path, body string) *httptest.ResponseRecorder {
+func serve(t *testing.T, svc service.Service, method, path, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	var r io.Reader
 	if body != "" {
 		r = strings.NewReader(body)
 	}
 	rec := httptest.NewRecorder()
-	NewRouter().ServeHTTP(rec, httptest.NewRequest(method, path, r))
+	NewRouter(svc).ServeHTTP(rec, httptest.NewRequest(method, path, r))
 	return rec
 }
 
@@ -71,11 +73,10 @@ type step struct {
 // flow stops at the first failed step, because the next ones depend on it.
 func runFlow(t *testing.T, steps []step) {
 	t.Helper()
-	ledger.Reset()
-	srv := httptest.NewServer(NewRouter())
+	svc := ledger.NewMemory()
+	srv := httptest.NewServer(NewRouter(svc))
 	t.Cleanup(func() {
 		srv.Close()
-		ledger.Reset()
 	})
 
 	for _, s := range steps {
@@ -195,7 +196,7 @@ func TestCreateTransaction(t *testing.T) {
 
 	tests := []struct {
 		name       string
-		budget     *ledger.Budget // set before the request
+		budget     *domain.Budget // set before the request
 		body       string
 		wantStatus int
 		wantBody   string // "" to check only the status
@@ -214,13 +215,13 @@ func TestCreateTransaction(t *testing.T) {
 		},
 		{
 			name:       "exactly up to the budget",
-			budget:     &ledger.Budget{Category: "еда", Limit: 450, Period: ledger.PeriodMonth},
+			budget:     &domain.Budget{Category: "еда", Limit: 450, Period: domain.PeriodMonth},
 			body:       lunch,
 			wantStatus: http.StatusCreated,
 		},
 		{
 			name:       "budget exceeded",
-			budget:     &ledger.Budget{Category: "еда", Limit: 449.99},
+			budget:     &domain.Budget{Category: "еда", Limit: 449.99},
 			body:       lunch,
 			wantStatus: http.StatusConflict,
 			wantBody:   `{"error":"budget exceeded"}`,
@@ -344,14 +345,14 @@ func TestCreateTransaction(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ledger.Reset()
+			svc := ledger.NewMemory()
 			if tt.budget != nil {
-				if _, err := ledger.SetBudget(*tt.budget); err != nil {
+				if _, err := svc.SetBudget(context.Background(), *tt.budget); err != nil {
 					t.Fatalf("SetBudget() error = %v", err)
 				}
 			}
 
-			rec := serve(t, http.MethodPost, "/api/transactions", tt.body)
+			rec := serve(t, svc, http.MethodPost, "/api/transactions", tt.body)
 			checkResponse(t, rec, tt.wantStatus, tt.wantBody)
 
 			// Only a created transaction is stored.
@@ -359,7 +360,7 @@ func TestCreateTransaction(t *testing.T) {
 			if tt.wantStatus == http.StatusCreated {
 				wantStored = 1
 			}
-			if got := len(mustListTransactions(t)); got != wantStored {
+			if got := len(mustListTransactions(t, svc)); got != wantStored {
 				t.Errorf("stored %d transactions, want %d", got, wantStored)
 			}
 		})
@@ -367,9 +368,9 @@ func TestCreateTransaction(t *testing.T) {
 }
 
 func TestCreateTransactionWithoutDate(t *testing.T) {
-	ledger.Reset()
+	svc := ledger.NewMemory()
 	before := time.Now().Format(dateLayout)
-	rec := serve(t, http.MethodPost, "/api/transactions", `{"amount":450,"category":"еда"}`)
+	rec := serve(t, svc, http.MethodPost, "/api/transactions", `{"amount":450,"category":"еда"}`)
 	after := time.Now().Format(dateLayout)
 	checkResponse(t, rec, http.StatusCreated, "")
 
@@ -383,114 +384,114 @@ func TestCreateTransactionWithoutDate(t *testing.T) {
 }
 
 func TestListTransactions(t *testing.T) {
-	ledger.Reset()
-	checkResponse(t, serve(t, http.MethodGet, "/api/transactions", ""), http.StatusOK, `[]`)
+	svc := ledger.NewMemory()
+	checkResponse(t, serve(t, svc, http.MethodGet, "/api/transactions", ""), http.StatusOK, `[]`)
 
 	for _, body := range []string{
 		`{"amount":450,"category":"еда","description":"ланч","date":"2025-09-10"}`,
 		`{"amount":120,"category":"транспорт","date":"2025-09-11"}`,
 	} {
-		checkResponse(t, serve(t, http.MethodPost, "/api/transactions", body), http.StatusCreated, "")
+		checkResponse(t, serve(t, svc, http.MethodPost, "/api/transactions", body), http.StatusCreated, "")
 	}
 
 	// Newest first.
-	checkResponse(t, serve(t, http.MethodGet, "/api/transactions", ""), http.StatusOK,
+	checkResponse(t, serve(t, svc, http.MethodGet, "/api/transactions", ""), http.StatusOK,
 		`[{"id":2,"amount":120,"category":"транспорт","description":"","date":"2025-09-11"},`+
 			`{"id":1,"amount":450,"category":"еда","description":"ланч","date":"2025-09-10"}]`)
 }
 
 func TestSetBudget(t *testing.T) {
 	// Every case starts with this budget.
-	initial := ledger.Budget{Category: "транспорт", Limit: 2000}
+	initial := domain.Budget{Category: "транспорт", Limit: 2000}
 
 	tests := []struct {
 		name       string
 		body       string
 		wantStatus int
 		wantBody   string
-		want       []ledger.Budget // budgets after the request
+		want       []domain.Budget // budgets after the request
 	}{
 		{
 			name:       "created",
 			body:       `{"category":"еда","limit":5000}`,
 			wantStatus: http.StatusCreated,
 			wantBody:   `{"category":"еда","limit":5000}`,
-			want:       []ledger.Budget{{Category: "еда", Limit: 5000}, initial},
+			want:       []domain.Budget{{Category: "еда", Limit: 5000}, initial},
 		},
 		{
 			name:       "created with a period",
 			body:       `{"category":" Отпуск ","limit":90000,"period":" Year "}`,
 			wantStatus: http.StatusCreated,
 			wantBody:   `{"category":"отпуск","limit":90000,"period":"year"}`,
-			want:       []ledger.Budget{{Category: "отпуск", Limit: 90000, Period: ledger.PeriodYear}, initial},
+			want:       []domain.Budget{{Category: "отпуск", Limit: 90000, Period: domain.PeriodYear}, initial},
 		},
 		{
 			name:       "updated",
 			body:       `{"category":"транспорт","limit":2500,"period":"month"}`,
 			wantStatus: http.StatusCreated,
 			wantBody:   `{"category":"транспорт","limit":2500,"period":"month"}`,
-			want:       []ledger.Budget{{Category: "транспорт", Limit: 2500, Period: ledger.PeriodMonth}},
+			want:       []domain.Budget{{Category: "транспорт", Limit: 2500, Period: domain.PeriodMonth}},
 		},
 		{
 			name:       "zero limit",
 			body:       `{"category":"еда","limit":0}`,
 			wantStatus: http.StatusBadRequest,
 			wantBody:   `{"error":"invalid limit 0 for \"еда\": must be from 0.01 to 999999999999.99"}`,
-			want:       []ledger.Budget{initial},
+			want:       []domain.Budget{initial},
 		},
 		{
 			name:       "no category",
 			body:       `{"limit":5000}`,
 			wantStatus: http.StatusBadRequest,
 			wantBody:   `{"error":"category must not be empty"}`,
-			want:       []ledger.Budget{initial},
+			want:       []domain.Budget{initial},
 		},
 		{
 			name:       "NUL in the category",
 			body:       `{"category":"е\u0000да","limit":5000}`,
 			wantStatus: http.StatusBadRequest,
 			wantBody:   `{"error":"invalid category: must be valid UTF-8 without NUL characters"}`,
-			want:       []ledger.Budget{initial},
+			want:       []domain.Budget{initial},
 		},
 		{
 			name:       "category too long",
 			body:       `{"category":"` + strings.Repeat("x", 3000) + `","limit":5000}`,
 			wantStatus: http.StatusBadRequest,
 			wantBody:   `{"error":"invalid category: must be at most 100 characters, got 3000"}`,
-			want:       []ledger.Budget{initial},
+			want:       []domain.Budget{initial},
 		},
 		{
 			name:       "unknown period",
 			body:       `{"category":"еда","limit":5000,"period":"week"}`,
 			wantStatus: http.StatusBadRequest,
 			wantBody:   `{"error":"invalid period \"week\" for \"еда\": must be \"month\", \"year\" or empty"}`,
-			want:       []ledger.Budget{initial},
+			want:       []domain.Budget{initial},
 		},
 		{
 			name:       "limit as a string",
 			body:       `{"category":"еда","limit":"5000"}`,
 			wantStatus: http.StatusBadRequest,
 			wantBody:   `{"error":"field \"limit\" must be a number"}`,
-			want:       []ledger.Budget{initial},
+			want:       []domain.Budget{initial},
 		},
 		{
 			name:       "invalid JSON",
 			body:       `{"category":"еда",`,
 			wantStatus: http.StatusBadRequest,
 			wantBody:   `{"error":"invalid JSON"}`,
-			want:       []ledger.Budget{initial},
+			want:       []domain.Budget{initial},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ledger.Reset()
-			if _, err := ledger.SetBudget(initial); err != nil {
+			svc := ledger.NewMemory()
+			if _, err := svc.SetBudget(context.Background(), initial); err != nil {
 				t.Fatalf("SetBudget() error = %v", err)
 			}
 
-			checkResponse(t, serve(t, http.MethodPost, "/api/budgets", tt.body), tt.wantStatus, tt.wantBody)
-			if got := mustListBudgets(t); !slices.Equal(got, tt.want) {
+			checkResponse(t, serve(t, svc, http.MethodPost, "/api/budgets", tt.body), tt.wantStatus, tt.wantBody)
+			if got := mustListBudgets(t, svc); !slices.Equal(got, tt.want) {
 				t.Errorf("budgets = %+v, want %+v", got, tt.want)
 			}
 		})
@@ -498,25 +499,25 @@ func TestSetBudget(t *testing.T) {
 }
 
 func TestListBudgets(t *testing.T) {
-	ledger.Reset()
-	checkResponse(t, serve(t, http.MethodGet, "/api/budgets", ""), http.StatusOK, `[]`)
+	svc := ledger.NewMemory()
+	checkResponse(t, serve(t, svc, http.MethodGet, "/api/budgets", ""), http.StatusOK, `[]`)
 
-	for _, b := range []ledger.Budget{
+	for _, b := range []domain.Budget{
 		{Category: "ремонт", Limit: 100000},
-		{Category: "еда", Limit: 5000, Period: ledger.PeriodMonth},
+		{Category: "еда", Limit: 5000, Period: domain.PeriodMonth},
 	} {
-		if _, err := ledger.SetBudget(b); err != nil {
+		if _, err := svc.SetBudget(context.Background(), b); err != nil {
 			t.Fatalf("SetBudget() error = %v", err)
 		}
 	}
 
 	// Sorted by category; a budget without a period has no "period" field.
-	checkResponse(t, serve(t, http.MethodGet, "/api/budgets", ""), http.StatusOK,
+	checkResponse(t, serve(t, svc, http.MethodGet, "/api/budgets", ""), http.StatusOK,
 		`[{"category":"еда","limit":5000,"period":"month"},{"category":"ремонт","limit":100000}]`)
 }
 
 func TestReportSummary(t *testing.T) {
-	ledger.Reset()
+	svc := ledger.NewMemory()
 	for _, body := range []string{
 		`{"amount":450,"category":"еда","description":"ланч","date":"2025-09-10"}`,
 		`{"amount":120,"category":"транспорт","date":"2025-09-11"}`,
@@ -525,7 +526,7 @@ func TestReportSummary(t *testing.T) {
 		`{"amount":50,"category":"кафе","date":"2025-08-31"}`,  // the month before
 		`{"amount":999,"category":"кафе","date":"2025-10-01"}`, // the month after
 	} {
-		checkResponse(t, serve(t, http.MethodPost, "/api/transactions", body), http.StatusCreated, "")
+		checkResponse(t, serve(t, svc, http.MethodPost, "/api/transactions", body), http.StatusCreated, "")
 	}
 
 	tests := []struct {
@@ -614,18 +615,18 @@ func TestReportSummary(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rec := serve(t, http.MethodGet, "/api/reports/summary"+tt.query, "")
+			rec := serve(t, svc, http.MethodGet, "/api/reports/summary"+tt.query, "")
 			checkResponse(t, rec, tt.wantStatus, tt.wantBody)
 		})
 	}
 }
 
 func TestReportSummaryOfCurrentMonth(t *testing.T) {
-	ledger.Reset()
-	checkResponse(t, serve(t, http.MethodPost, "/api/transactions", `{"amount":100,"category":"еда"}`), http.StatusCreated, "")
+	svc := ledger.NewMemory()
+	checkResponse(t, serve(t, svc, http.MethodPost, "/api/transactions", `{"amount":100,"category":"еда"}`), http.StatusCreated, "")
 
 	// Without parameters the report covers the current month, today included.
-	rec := serve(t, http.MethodGet, "/api/reports/summary", "")
+	rec := serve(t, svc, http.MethodGet, "/api/reports/summary", "")
 	checkResponse(t, rec, http.StatusOK, "")
 	var got ReportSummaryResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
@@ -650,11 +651,7 @@ func TestReportSummaryOfCurrentMonth(t *testing.T) {
 // lost connection to PostgreSQL: 500 with a general message, while the error
 // itself goes only to the log.
 func TestLedgerError(t *testing.T) {
-	ledger.Reset()
-	t.Cleanup(ledger.Reset)
-	if err := ledger.Close(); err != nil {
-		t.Fatalf("ledger.Close() error = %v", err)
-	}
+	svc := failingService{}
 	logs := captureLog(t)
 
 	tests := []struct {
@@ -672,33 +669,33 @@ func TestLedgerError(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			logs.Reset()
-			rec := serve(t, tt.method, tt.path, tt.body)
+			rec := serve(t, svc, tt.method, tt.path, tt.body)
 			checkResponse(t, rec, http.StatusInternalServerError, `{"error":"internal server error"}`)
-			if !strings.Contains(logs.String(), "internal error: ledger is closed") {
+			if !strings.Contains(logs.String(), "internal error: storage unavailable") {
 				t.Errorf("log = %q, want the error of the ledger", logs)
 			}
 		})
 	}
 }
 
-// mustListTransactions returns ledger.ListTransactions() and stops the test
+// mustListTransactions returns svc.ListTransactions(context.Background()) and stops the test
 // if it fails.
-func mustListTransactions(t *testing.T) []ledger.Transaction {
+func mustListTransactions(t *testing.T, svc service.Service) []domain.Transaction {
 	t.Helper()
-	list, err := ledger.ListTransactions()
+	list, err := svc.ListTransactions(context.Background())
 	if err != nil {
-		t.Fatalf("ledger.ListTransactions() error = %v", err)
+		t.Fatalf("ListTransactions() error = %v", err)
 	}
 	return list
 }
 
-// mustListBudgets returns ledger.ListBudgets() and stops the test if it
+// mustListBudgets returns svc.ListBudgets(context.Background()) and stops the test if it
 // fails.
-func mustListBudgets(t *testing.T) []ledger.Budget {
+func mustListBudgets(t *testing.T, svc service.Service) []domain.Budget {
 	t.Helper()
-	list, err := ledger.ListBudgets()
+	list, err := svc.ListBudgets(context.Background())
 	if err != nil {
-		t.Fatalf("ledger.ListBudgets() error = %v", err)
+		t.Fatalf("ListBudgets() error = %v", err)
 	}
 	return list
 }

@@ -40,11 +40,12 @@ func run(addr string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := ledger.Connect(ctx); err != nil {
+	svc, closeFn, err := ledger.New(ctx)
+	if err != nil {
 		return err
 	}
 	defer func() {
-		if err := ledger.Close(); err != nil {
+		if err := closeFn(); err != nil {
 			log.Printf("close the ledger: %v", err)
 		}
 	}()
@@ -55,7 +56,7 @@ func run(addr string) error {
 		return err
 	}
 	srv := &http.Server{
-		Handler:           api.NewRouter(),
+		Handler:           api.NewRouter(svc),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,

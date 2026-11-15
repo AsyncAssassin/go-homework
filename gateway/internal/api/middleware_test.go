@@ -34,12 +34,12 @@ func captureLog(t *testing.T) *bytes.Buffer {
 
 func TestLogging(t *testing.T) {
 	logs := captureLog(t)
-	ledger.Reset()
+	svc := ledger.NewMemory()
 
-	serve(t, http.MethodPost, "/api/budgets", `{"category":"еда","limit":5000}`)
-	serve(t, http.MethodGet, "/api/transactions?limit=1", "") // the query is not logged
-	serve(t, http.MethodDelete, "/api/budgets", "")
-	serve(t, http.MethodGet, "/api/%0Afake", "") // an escaped line break stays escaped
+	serve(t, svc, http.MethodPost, "/api/budgets", `{"category":"еда","limit":5000}`)
+	serve(t, svc, http.MethodGet, "/api/transactions?limit=1", "") // the query is not logged
+	serve(t, svc, http.MethodDelete, "/api/budgets", "")
+	serve(t, svc, http.MethodGet, "/api/%0Afake", "") // an escaped line break stays escaped
 
 	// Method, path, status and duration, one line per request.
 	want := []string{

@@ -5,8 +5,11 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/AsyncAssassin/go-homework/ledger"
+	"github.com/AsyncAssassin/go-homework/ledger/domain"
+	"github.com/AsyncAssassin/go-homework/ledger/service"
 )
+
+type handlers struct{ service service.Service }
 
 // pingResponse is the body of the answer to GET /ping.
 type pingResponse struct {
@@ -22,7 +25,7 @@ func handlePing(w http.ResponseWriter, _ *http.Request) {
 // handleCreateTransaction serves POST /api/transactions: 201 with the
 // stored transaction, 400 for an invalid one, 409 if it does not fit into
 // the budget of its category.
-func handleCreateTransaction(w http.ResponseWriter, r *http.Request) {
+func (h *handlers) handleCreateTransaction(w http.ResponseWriter, r *http.Request) {
 	req, ok := decodeJSON[CreateTransactionRequest](w, r)
 	if !ok {
 		return
@@ -32,14 +35,12 @@ func handleCreateTransaction(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := tx.Validate(); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
 
-	stored, err := ledger.AddTransaction(tx)
+	stored, err := h.service.AddTransaction(r.Context(), tx)
 	switch {
-	case errors.Is(err, ledger.ErrBudgetExceeded):
+	case isValidationError(err):
+		writeError(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, domain.ErrBudgetExceeded):
 		writeError(w, http.StatusConflict, "budget exceeded")
 	case err != nil:
 		writeInternalError(w, err)
@@ -50,8 +51,8 @@ func handleCreateTransaction(w http.ResponseWriter, r *http.Request) {
 
 // handleListTransactions serves GET /api/transactions: 200 with all
 // transactions, newest first.
-func handleListTransactions(w http.ResponseWriter, _ *http.Request) {
-	txs, err := ledger.ListTransactions()
+func (h *handlers) handleListTransactions(w http.ResponseWriter, r *http.Request) {
+	txs, err := h.service.ListTransactions(r.Context())
 	if err != nil {
 		writeInternalError(w, err)
 		return
@@ -62,18 +63,18 @@ func handleListTransactions(w http.ResponseWriter, _ *http.Request) {
 // handleSetBudget serves POST /api/budgets: 201 with the stored budget,
 // whether it is new or replaces the budget of the same category, and 400
 // for an invalid one.
-func handleSetBudget(w http.ResponseWriter, r *http.Request) {
+func (h *handlers) handleSetBudget(w http.ResponseWriter, r *http.Request) {
 	req, ok := decodeJSON[CreateBudgetRequest](w, r)
 	if !ok {
 		return
 	}
 	b := toBudget(req)
-	if err := b.Validate(); err != nil {
+
+	stored, err := h.service.SetBudget(r.Context(), b)
+	if isValidationError(err) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-
-	stored, err := ledger.SetBudget(b)
 	if err != nil {
 		writeInternalError(w, err)
 		return
@@ -83,8 +84,8 @@ func handleSetBudget(w http.ResponseWriter, r *http.Request) {
 
 // handleListBudgets serves GET /api/budgets: 200 with all budgets sorted
 // by category.
-func handleListBudgets(w http.ResponseWriter, _ *http.Request) {
-	budgets, err := ledger.ListBudgets()
+func (h *handlers) handleListBudgets(w http.ResponseWriter, r *http.Request) {
+	budgets, err := h.service.ListBudgets(r.Context())
 	if err != nil {
 		writeInternalError(w, err)
 		return
@@ -97,20 +98,27 @@ func handleListBudgets(w http.ResponseWriter, _ *http.Request) {
 // to, both included, and 400 for an invalid date or a range that ends
 // before it starts. The default range is described at reportRange. The
 // ledger caches the report in Redis for 30 seconds.
-func handleReportSummary(w http.ResponseWriter, r *http.Request) {
+func (h *handlers) handleReportSummary(w http.ResponseWriter, r *http.Request) {
 	from, to, err := reportRange(r.URL.Query(), time.Now())
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	report, err := ledger.GetReportSummary(r.Context(), from, to)
+	report, err := h.service.GetReportSummary(r.Context(), from, to)
 	switch {
-	case errors.Is(err, ledger.ErrInvalidRange), errors.Is(err, ledger.ErrInvalidDate):
+	case errors.Is(err, domain.ErrInvalidRange), errors.Is(err, domain.ErrInvalidDate):
 		writeError(w, http.StatusBadRequest, err.Error())
 	case err != nil:
 		writeInternalError(w, err)
 	default:
 		writeJSON(w, http.StatusOK, newReportSummaryResponse(report))
 	}
+}
+
+// isValidationError maps service validation failures to the existing HTTP 400.
+func isValidationError(err error) bool {
+	return errors.Is(err, domain.ErrInvalidAmount) || errors.Is(err, domain.ErrEmptyCategory) ||
+		errors.Is(err, domain.ErrInvalidCategory) || errors.Is(err, domain.ErrInvalidDescription) ||
+		errors.Is(err, domain.ErrInvalidDate) || errors.Is(err, domain.ErrInvalidLimit) || errors.Is(err, domain.ErrInvalidPeriod)
 }

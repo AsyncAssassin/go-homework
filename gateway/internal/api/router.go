@@ -1,18 +1,22 @@
 // Package api is the HTTP layer of the gateway. It converts JSON requests
-// to ledger models, calls the ledger package and converts the results back
+// to ledger models, calls an injected service and converts the results back
 // to JSON responses.
 package api
 
-import "net/http"
+import (
+	"net/http"
+
+	"github.com/AsyncAssassin/go-homework/ledger/service"
+)
 
 // NewRouter returns the HTTP handler of the gateway: GET /ping and the REST
 // API of the ledger under /api. Every response has the JSON Content-Type,
 // every error is {"error": "..."}, and every request is logged.
-func NewRouter() http.Handler {
+func NewRouter(svc service.Service) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /ping", handlePing)
 	mux.HandleFunc("/ping", methodNotAllowed("GET, HEAD"))
-	mux.Handle("/api/", http.StripPrefix("/api", newAPIRouter()))
+	mux.Handle("/api/", http.StripPrefix("/api", newAPIRouter(svc)))
 	// Without this route ServeMux would redirect /api to /api/.
 	mux.HandleFunc("/api", handleNotFound)
 	mux.HandleFunc("/", handleNotFound)
@@ -23,17 +27,18 @@ func NewRouter() http.Handler {
 // to /api. A route without a method takes the methods the other routes of
 // its path do not; without it ServeMux would answer them with a plain-text
 // 405.
-func newAPIRouter() http.Handler {
+func newAPIRouter(svc service.Service) http.Handler {
+	h := &handlers{service: svc}
 	const allowed = "GET, HEAD, POST"
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /transactions", handleListTransactions)
-	mux.HandleFunc("POST /transactions", handleCreateTransaction)
+	mux.HandleFunc("GET /transactions", h.handleListTransactions)
+	mux.HandleFunc("POST /transactions", h.handleCreateTransaction)
 	mux.HandleFunc("/transactions", methodNotAllowed(allowed))
-	mux.HandleFunc("GET /budgets", handleListBudgets)
-	mux.HandleFunc("POST /budgets", handleSetBudget)
+	mux.HandleFunc("GET /budgets", h.handleListBudgets)
+	mux.HandleFunc("POST /budgets", h.handleSetBudget)
 	mux.HandleFunc("/budgets", methodNotAllowed(allowed))
-	mux.HandleFunc("GET /reports/summary", handleReportSummary)
+	mux.HandleFunc("GET /reports/summary", h.handleReportSummary)
 	mux.HandleFunc("/reports/summary", methodNotAllowed("GET, HEAD"))
 	mux.HandleFunc("/", handleNotFound)
 	return mux

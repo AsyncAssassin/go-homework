@@ -20,6 +20,8 @@ import (
 	"time"
 
 	"github.com/AsyncAssassin/go-homework/ledger"
+	"github.com/AsyncAssassin/go-homework/ledger/domain"
+	"github.com/AsyncAssassin/go-homework/ledger/service"
 )
 
 func main() {
@@ -42,33 +44,34 @@ func main() {
 // showStoredData connects to PostgreSQL and Redis and writes the budgets,
 // the transactions and the report of the current month to w.
 func showStoredData(ctx context.Context, w io.Writer) error {
-	if err := ledger.Connect(ctx); err != nil {
+	svc, closeFn, err := ledger.New(ctx)
+	if err != nil {
 		return err
 	}
 	defer func() {
-		if err := ledger.Close(); err != nil {
+		if err := closeFn(); err != nil {
 			log.Printf("close the ledger: %v", err)
 		}
 	}()
 	log.Print("Ledger service started")
 
 	now := time.Now()
-	if err := printBudgets(w, now); err != nil {
+	if err := printBudgets(svc, w, now); err != nil {
 		return err
 	}
 	fmt.Fprintln(w)
-	if err := printTransactions(w); err != nil {
+	if err := printTransactions(svc, w); err != nil {
 		return err
 	}
 
 	y, m, _ := now.Date()
-	from, to := ledger.Day(y, m, 1), ledger.Day(y, m+1, 0)
+	from, to := domain.Day(y, m, 1), domain.Day(y, m+1, 0)
 	// The first request fills the cache and the second one is answered from
 	// it: the log shows "report cache miss" and then "report cache hit".
-	var report ledger.ReportSummary
+	var report domain.ReportSummary
 	for range 2 {
 		var err error
-		if report, err = ledger.GetReportSummary(ctx, from, to); err != nil {
+		if report, err = svc.GetReportSummary(ctx, from, to); err != nil {
 			return err
 		}
 	}
@@ -81,18 +84,19 @@ func showStoredData(ctx context.Context, w io.Writer) error {
 // budgets, loads more from the JSON file at budgetsPath if it exists and
 // shows how budgets limit new transactions.
 func runDemo(budgetsPath string) error {
+	svc := ledger.NewMemory()
 	fmt.Println("Ledger service started")
 
 	// Initial budgets are set in code, then budgets.json adds and updates some.
-	for _, b := range []ledger.Budget{
-		{Category: "еда", Limit: 5000, Period: ledger.PeriodMonth},
-		{Category: "транспорт", Limit: 2000, Period: ledger.PeriodMonth},
+	for _, b := range []domain.Budget{
+		{Category: "еда", Limit: 5000, Period: domain.PeriodMonth},
+		{Category: "транспорт", Limit: 2000, Period: domain.PeriodMonth},
 	} {
-		if _, err := ledger.SetBudget(b); err != nil {
+		if _, err := svc.SetBudget(context.Background(), b); err != nil {
 			return fmt.Errorf("set budget: %w", err)
 		}
 	}
-	loaded, err := loadBudgetsIfExists(budgetsPath)
+	loaded, err := loadBudgetsIfExists(svc, budgetsPath)
 	if err != nil {
 		return err
 	}
@@ -107,12 +111,12 @@ func runDemo(budgetsPath string) error {
 	lastMonth := now.AddDate(0, 0, -now.Day()) // the last day of the previous month
 
 	fmt.Println()
-	if err := printBudgets(os.Stdout, now); err != nil {
+	if err := printBudgets(svc, os.Stdout, now); err != nil {
 		return err
 	}
 
 	fmt.Println("\nAdding transactions:")
-	for _, tx := range []ledger.Transaction{
+	for _, tx := range []domain.Transaction{
 		{Amount: 1250.50, Category: "еда", Description: "продукты на неделю", Date: now},
 		{Amount: 2000, Category: "транспорт", Description: "проездной", Date: now},
 		{Amount: 3500, Category: "еда", Description: "кафе", Date: now},
@@ -123,18 +127,18 @@ func runDemo(budgetsPath string) error {
 		{Amount: 700, Category: "здоровье", Description: "лекарства", Date: now}, // category without a budget
 		{Amount: 0, Category: "еда", Description: "пустой чек", Date: now},       // invalid amount
 	} {
-		addAndReport(tx)
+		addAndReport(svc, tx)
 	}
 
 	fmt.Println("\nBudget loading errors:")
-	showLoadErrors()
+	showLoadErrors(svc)
 
 	fmt.Println()
-	if err := printTransactions(os.Stdout); err != nil {
+	if err := printTransactions(svc, os.Stdout); err != nil {
 		return err
 	}
 	fmt.Println()
-	if err := printBudgets(os.Stdout, now); err != nil {
+	if err := printBudgets(svc, os.Stdout, now); err != nil {
 		return err
 	}
 
@@ -147,8 +151,8 @@ func runDemo(budgetsPath string) error {
 // whether it did. The file is optional: when it does not exist, the budgets
 // set in code stay in effect and no error is returned. A file that exists
 // but cannot be read or parsed is an error.
-func loadBudgetsIfExists(path string) (bool, error) {
-	err := loadBudgetsFromFile(path)
+func loadBudgetsIfExists(svc service.Service, path string) (bool, error) {
+	err := loadBudgetsFromFile(svc, path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return false, nil
 	}
@@ -156,21 +160,21 @@ func loadBudgetsIfExists(path string) (bool, error) {
 }
 
 // loadBudgetsFromFile loads budgets from the JSON file at path.
-func loadBudgetsFromFile(path string) error {
+func loadBudgetsFromFile(svc service.Service, path string) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return fmt.Errorf("load budgets: %w", err)
 	}
 	defer f.Close()
 
-	return ledger.LoadBudgets(bufio.NewReader(f))
+	return svc.LoadBudgets(context.Background(), bufio.NewReader(f))
 }
 
 // addAndReport adds tx and prints whether it was accepted.
-func addAndReport(tx ledger.Transaction) {
-	_, err := ledger.AddTransaction(tx)
+func addAndReport(svc service.Service, tx domain.Transaction) {
+	_, err := svc.AddTransaction(context.Background(), tx)
 
-	var budgetErr *ledger.BudgetExceededError
+	var budgetErr *domain.BudgetExceededError
 	switch {
 	case err == nil:
 		fmt.Printf("  added    %q %.2f (%s)\n", tx.Description, tx.Amount, tx.Category)
@@ -184,7 +188,7 @@ func addAndReport(tx ledger.Transaction) {
 
 // showLoadErrors prints the errors returned for broken budget sources.
 // None of them changes the stored budgets.
-func showLoadErrors() {
+func showLoadErrors(svc service.Service) {
 	for _, c := range []struct {
 		name  string
 		input string
@@ -194,9 +198,9 @@ func showLoadErrors() {
 		{name: "invalid limit", input: `[{"category": "кафе", "limit": 1000}, {"category": "такси", "limit": -5}]`},
 		{name: "invalid period", input: `[{"category": "кафе", "limit": 1000, "period": "week"}]`},
 	} {
-		fmt.Printf("  %s: %v\n", c.name, ledger.LoadBudgets(strings.NewReader(c.input)))
+		fmt.Printf("  %s: %v\n", c.name, svc.LoadBudgets(context.Background(), strings.NewReader(c.input)))
 	}
-	fmt.Printf("  missing file: %v\n", loadBudgetsFromFile("no-such-dir/budgets.json"))
+	fmt.Printf("  missing file: %v\n", loadBudgetsFromFile(svc, "no-such-dir/budgets.json"))
 }
 
 // showValidation checks transactions and budgets with CheckValid, which
@@ -204,17 +208,17 @@ func showLoadErrors() {
 // returns errors, so they are printed here.
 func showValidation(w io.Writer) {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	for _, v := range []ledger.Validatable{
-		ledger.Transaction{Amount: 450, Category: "еда", Description: "ланч"},
-		ledger.Transaction{Amount: -100, Category: "еда", Description: "возврат"},
-		ledger.Transaction{Amount: 300, Category: " ", Description: "такси"},
-		ledger.Transaction{Amount: 50, Category: "еда", Description: "кофе", Date: time.Date(0, time.March, 1, 12, 0, 0, 0, time.Local)},
-		ledger.Budget{Category: "кафе", Limit: 3000, Period: ledger.PeriodMonth},
-		ledger.Budget{Category: "кафе", Limit: 0},
-		ledger.Budget{Limit: 1000},
+	for _, v := range []domain.Validatable{
+		domain.Transaction{Amount: 450, Category: "еда", Description: "ланч"},
+		domain.Transaction{Amount: -100, Category: "еда", Description: "возврат"},
+		domain.Transaction{Amount: 300, Category: " ", Description: "такси"},
+		domain.Transaction{Amount: 50, Category: "еда", Description: "кофе", Date: time.Date(0, time.March, 1, 12, 0, 0, 0, time.Local)},
+		domain.Budget{Category: "кафе", Limit: 3000, Period: domain.PeriodMonth},
+		domain.Budget{Category: "кафе", Limit: 0},
+		domain.Budget{Limit: 1000},
 	} {
 		result := "ok"
-		if err := ledger.CheckValid(v); err != nil {
+		if err := domain.CheckValid(v); err != nil {
 			result = "invalid: " + err.Error()
 		}
 		fmt.Fprintf(tw, "  %T\t%s\t%s\n", v, describe(v), result)
@@ -224,17 +228,17 @@ func showValidation(w io.Writer) {
 
 // describe returns a short description of a transaction or a budget for
 // the validation demo.
-func describe(v ledger.Validatable) string {
+func describe(v domain.Validatable) string {
 	switch v := v.(type) {
-	case ledger.Transaction:
+	case domain.Transaction:
 		s := fmt.Sprintf("%.2f %q (%s)", v.Amount, v.Description, categoryOrNone(v.Category))
 		if !v.Date.IsZero() {
 			s += " on " + v.Date.Format(time.DateOnly)
 		}
 		return s
-	case ledger.Budget:
+	case domain.Budget:
 		s := fmt.Sprintf("%s %.2f", categoryOrNone(v.Category), v.Limit)
-		if v.Period != ledger.PeriodNone {
+		if v.Period != domain.PeriodNone {
 			s += " a " + string(v.Period)
 		}
 		return s
@@ -254,8 +258,8 @@ func categoryOrNone(category string) string {
 // printTransactions writes the stored transactions to w as a table, newest
 // first. Dates are shown in the local time zone, the one budget periods are
 // counted in.
-func printTransactions(w io.Writer) error {
-	txs, err := ledger.ListTransactions()
+func printTransactions(svc service.Service, w io.Writer) error {
+	txs, err := svc.ListTransactions(context.Background())
 	if err != nil {
 		return err
 	}
@@ -271,8 +275,8 @@ func printTransactions(w io.Writer) error {
 
 // printBudgets writes every budget with the amounts spent and left to w.
 // The amounts are for the budget period that contains now.
-func printBudgets(w io.Writer, now time.Time) error {
-	list, err := ledger.ListBudgetUsage(now)
+func printBudgets(svc service.Service, w io.Writer, now time.Time) error {
+	list, err := svc.ListBudgetUsage(context.Background(), now)
 	if err != nil {
 		return err
 	}
@@ -292,7 +296,7 @@ func printBudgets(w io.Writer, now time.Time) error {
 
 // printReport writes the amounts spent in every category of the report and
 // their total to w.
-func printReport(w io.Writer, r ledger.ReportSummary) {
+func printReport(w io.Writer, r domain.ReportSummary) {
 	fmt.Fprintf(w, "Report from %s to %s:\n", r.From.Format(time.DateOnly), r.To.Format(time.DateOnly))
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "CATEGORY\tSPENT")

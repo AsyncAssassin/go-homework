@@ -9,8 +9,9 @@
 | 5 | Веб-приложения: REST API в Gateway | `gateway/`, `ledger/` |
 | 6 | Тестирование | `gateway/`, `ledger/` |
 | 7 | Базы данных: PostgreSQL и Redis | `ledger/`, `gateway/`, `compose.yaml` |
+| 8 | Архитектура: домен, репозитории, сервис и внедрение зависимостей | `ledger/`, `gateway/` |
 
-Состояние репозитория на момент сдачи каждого ДЗ отмечено тегом `hwN`.
+Состояние репозитория на момент сдачи каждого ДЗ отмечается тегом `hwN`. Разделы ДЗ 1-7 описывают развитие проекта; с ДЗ 8 пакетные операции заменены методами `service.Service`, модели перенесены в `ledger/domain`. Текущая структура описана в [README Ledger](ledger/README.md#устройство).
 
 ## Требования
 
@@ -167,7 +168,7 @@ cd ledger
 go run ./cmd/ledger -demo
 ```
 
-Проверка данных отделена от бизнес-логики интерфейсом `Validatable` (`ledger/validate.go`):
+Проверка данных отделена от бизнес-логики интерфейсом `Validatable` (`ledger/domain/validate.go`):
 
 ```go
 type Validatable interface {
@@ -185,20 +186,20 @@ type Validatable interface {
 
 ### Пример вывода
 
-Вывод из ДЗ 3 не изменился, в конец добавлен раздел, где `CheckValid` проверяет разные типы через интерфейс. Первый столбец (`%T`) показывает, какой тип лежит в интерфейсе. С ДЗ 5 типы находятся в пакете `ledger`, поэтому они названы `ledger.Transaction` и `ledger.Budget` (в ДЗ 4 `main.Transaction` и `main.Budget`):
+Вывод из ДЗ 3 не изменился, в конец добавлен раздел, где `CheckValid` проверяет разные типы через интерфейс. Первый столбец (`%T`) показывает, какой тип лежит в интерфейсе. С ДЗ 8 типы находятся в пакете `domain`, поэтому вывод показывает `domain.Transaction` и `domain.Budget`. В ДЗ 5-7 это были типы пакета `ledger`, в ДЗ 4 пакета `main`:
 
 ```text
 Validation through the Validatable interface:
-  ledger.Transaction  450.00 "ланч" (еда)               ok
-  ledger.Transaction  -100.00 "возврат" (еда)           invalid: invalid amount -100: must be from 0.01 to 999999999999.99
-  ledger.Transaction  300.00 "такси" (no category)      invalid: category must not be empty
-  ledger.Transaction  50.00 "кофе" (еда) on 0000-03-01  invalid: invalid date 0000-03-01: must be from 0001-01-02 to 9999-12-30 UTC
-  ledger.Budget       кафе 3000.00 a month              ok
-  ledger.Budget       кафе 0.00                         invalid: invalid limit 0 for "кафе": must be from 0.01 to 999999999999.99
-  ledger.Budget       no category 1000.00               invalid: category must not be empty
+  domain.Transaction  450.00 "ланч" (еда)               ok
+  domain.Transaction  -100.00 "возврат" (еда)           invalid: invalid amount -100: must be from 0.01 to 999999999999.99
+  domain.Transaction  300.00 "такси" (no category)      invalid: category must not be empty
+  domain.Transaction  50.00 "кофе" (еда) on 0000-03-01  invalid: invalid date 0000-03-01: must be from 0001-01-02 to 9999-12-30 UTC
+  domain.Budget       кафе 3000.00 a month              ok
+  domain.Budget       кафе 0.00                         invalid: invalid limit 0 for "кафе": must be from 0.01 to 999999999999.99
+  domain.Budget       no category 1000.00               invalid: category must not be empty
 ```
 
-Табличные тесты `Validate()` и `CheckValid` находятся в `ledger/ledger_test.go`.
+Табличные тесты `Validate()` и `CheckValid` находятся в `ledger/domain/domain_test.go` (до ДЗ 8 в `ledger/ledger_test.go`).
 
 ## ДЗ 5. Веб-приложения: REST API в Gateway
 
@@ -338,10 +339,10 @@ go tool cover -func=cover.out | tail -1      # итоговый процент
 
 | Требование | Тест |
 |------------|------|
-| `ledger.Reset()` очищает транзакции и бюджеты | тесты с общим состоянием вызывают `Reset()` в начале, `TestBudgetRule` и HTTP-цепочки ещё и в `t.Cleanup` |
-| Табличный тест `Transaction.Validate()` | `TestTransactionValidate` в `ledger/ledger_test.go`: валидная транзакция, нулевая и отрицательная сумма, пустая категория, границы суммы и даты |
+| Изоляция тестовых данных | с ДЗ 8 каждый сценарий получает отдельный `ledger.NewMemory()`; `TestMemoryServicesAreIndependent` проверяет независимость |
+| Табличный тест `Transaction.Validate()` | `TestTransactionValidate` в `ledger/domain/domain_test.go`: валидная транзакция, нулевая и отрицательная сумма, пустая категория, границы суммы и даты |
 | Табличный тест `Budget.Validate()` | `TestBudgetValidate` там же: положительный, нулевой и отрицательный лимит, пустая категория, период |
-| Превышение бюджета | `TestBudgetRule` там же: бюджет «еда» 5000, транзакция на 4500 проходит, на 600 получает `ErrBudgetExceeded`, длина `ListTransactions()` не меняется. Граничные случаи в `TestAddTransactionBudget` (`ledger/budget_test.go`) |
+| Превышение бюджета | `TestBudgetRule` в `ledger/ledger_test.go`: бюджет «еда» 5000, транзакция на 4500 проходит, на 600 получает `ErrBudgetExceeded`, длина `ListTransactions()` не меняется. Граничные случаи в `TestAddTransactionBudget` (`ledger/budget_test.go`) |
 | HTTP `/api/budgets` | `TestBudgetsFlow` в `gateway/internal/api/handlers_test.go`: подтесты `create` (201), `list` (200), `bad_json` и `zero_limit` (400 и `{"error":"..."}`), `update`. Отрицательный лимит и другие ошибки в таблице `TestSetBudget` |
 | HTTP `/api/transactions` | `TestTransactionsFlow` там же: `budget`, `ok` (201), `list` (200), `exceeded` (409 и `{"error":"budget exceeded"}`), `bad_json` (400), отклонённые запросы не сохраняются. Ошибки валидации в таблице `TestCreateTransaction` |
 | Заголовок и формат ответов | каждый HTTP-тест сверяет статус и `Content-Type: application/json; charset=utf-8`, почти все случаи сравнивают и тело ответа целиком |
@@ -371,10 +372,22 @@ go run .
 - Миграции goose в `ledger/migrations/`: таблицы `budgets` и `expenses` по условию, столбец `period` для периодов бюджетов из ДЗ 3 и индекс `(category, date)`.
 - `ledger/internal/db`: `sql.Open("pgx", dsn)` и `Ping`, пул `SetMaxOpenConns(10)`, `SetMaxIdleConns(5)` и `SetConnMaxLifetime(30 * time.Minute)`. Строка подключения берётся из `DATABASE_URL` или из `DB_*`. При ошибке программа выводит понятное сообщение и завершается с кодом 1, при успехе пишет подключение в лог. Ошибка разбора строки подключения не цитирует её, чтобы не показать пароль. Если миграции не применены, программа не запускается и подсказывает команду goose.
 - `SetBudget` выполняет UPSERT, `ListBudgets` и `ListTransactions` читают из таблиц. `AddTransaction` проверяет лимит и вставляет запись в одной транзакции БД, при превышении лимита возвращает ошибку и ничего не вставляет. `LoadBudgets` сохраняет бюджеты в порядке категорий, поэтому параллельные загрузки не попадают во взаимоблокировку.
-- Дни транзакций и отчётов считаются в местном часовом поясе через `ledger.Day`, в том числе в дни без полуночи при переходе на летнее время.
+- Дни транзакций и отчётов считаются в местном часовом поясе через `domain.Day` (до ДЗ 8 `ledger.Day`), в том числе в дни без полуночи при переходе на летнее время.
 - `ledger/internal/cache`: клиент go-redis с настройками из `REDIS_ADDR`, `REDIS_DB`, `REDIS_PASSWORD` и записью в лог о подключении. `GetReportSummary(ctx, from, to)` берёт отчёт из Redis или считает его в PostgreSQL и сохраняет на 30 секунд, в логе видно `report cache miss` и `report cache hit`. Список бюджетов кешируется под ключом `budgets:all` на 30 секунд и сбрасывается после `SetBudget` и `LoadBudgets`. Каждый запрос к Redis ограничен 0.5 секунды без повторов: если Redis завис или недоступен, ledger пишет ошибку в лог и работает с PostgreSQL.
 - Gateway подключает ledger при старте, корректно останавливается по `Ctrl+C` (повторный `Ctrl+C` завершает его сразу), отвечает 500 при ошибке хранилища и отдаёт отчёт по `GET /api/reports/summary`.
 - Внешние зависимости: `github.com/jackc/pgx/v5` v5.7.4 и `github.com/redis/go-redis/v9` v9.18.0, последние версии, которые работают с Go 1.22.
+
+## ДЗ 8. Архитектура и дизайн приложений
+
+- `ledger/domain`: сущности, валидация, ошибки и доменные контракты хранения.
+- `ledger/service`: интерфейс приложения и бизнес-логика с внедренными репозиториями. Проверка бюджета выполняется внутри атомарной операции, сохраняя защиту от конкурентного превышения лимита.
+- `ledger/internal/repository/{pg,memory,cached}`: PostgreSQL, память для демо/тестов и кеш Redis. Репозитории не импортируют Gateway и не решают, допустим ли расход по бюджету.
+- `ledger.New(ctx)`: конфигурация, подключения, проверка таблиц, сборка сервиса и функция закрытия ресурсов. Миграции запускаются отдельно, как в ДЗ 7.
+- `api.NewRouter(svc)`: Gateway получает интерфейс сервиса, вызывает его методы и передает контекст запроса. HTTP-контракт не изменился.
+
+[План выполнения](docs/hw8-plan.md), [подробное устройство Ledger](ledger/README.md#устройство), [инициализация Gateway](gateway/README.md#что-изменилось-в-дз-8).
+
+Проверки: прежние тесты ДЗ 6-7, независимость экземпляров сервиса, отмена контекста, подмена сервисов и репозиториев, ошибки этапов сохранения, откат при ошибке и панике, PostgreSQL/Redis и curl-сценарии. Команды запуска приложений и миграций остались прежними.
 
 ## Тесты
 

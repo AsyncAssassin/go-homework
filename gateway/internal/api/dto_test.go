@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/AsyncAssassin/go-homework/ledger"
+	"github.com/AsyncAssassin/go-homework/ledger/domain"
 )
 
 func TestToTransaction(t *testing.T) {
@@ -15,13 +15,13 @@ func TestToTransaction(t *testing.T) {
 	tests := []struct {
 		name    string
 		req     CreateTransactionRequest
-		want    ledger.Transaction
+		want    domain.Transaction
 		wantErr error
 	}{
 		{
 			name: "with a date",
 			req:  CreateTransactionRequest{Amount: 450, Category: "еда", Description: "ланч", Date: "2025-09-10"},
-			want: ledger.Transaction{
+			want: domain.Transaction{
 				Amount: 450, Category: "еда", Description: "ланч",
 				Date: time.Date(2025, time.September, 10, 0, 0, 0, 0, time.Local),
 			},
@@ -30,21 +30,21 @@ func TestToTransaction(t *testing.T) {
 			// In America/Santiago the clocks skip midnight of this day.
 			name: "day without midnight",
 			req:  CreateTransactionRequest{Amount: 450, Category: "еда", Date: "2026-09-06"},
-			want: ledger.Transaction{Amount: 450, Category: "еда", Date: ledger.Day(2026, time.September, 6)},
+			want: domain.Transaction{Amount: 450, Category: "еда", Date: domain.Day(2026, time.September, 6)},
 		},
 		{
 			name: "without a date",
 			req:  CreateTransactionRequest{Amount: 450, Category: "еда"},
-			want: ledger.Transaction{Amount: 450, Category: "еда"},
+			want: domain.Transaction{Amount: 450, Category: "еда"},
 		},
 		{
 			// Fields are passed as they are: ledger checks and normalizes them.
 			name: "invalid fields",
 			req:  CreateTransactionRequest{Amount: -1, Category: " "},
-			want: ledger.Transaction{Amount: -1, Category: " "},
+			want: domain.Transaction{Amount: -1, Category: " "},
 		},
-		{name: "date with a time", req: CreateTransactionRequest{Date: "2025-09-10T12:00:00Z"}, wantErr: ledger.ErrInvalidDate},
-		{name: "no such day", req: CreateTransactionRequest{Date: "2025-02-30"}, wantErr: ledger.ErrInvalidDate},
+		{name: "date with a time", req: CreateTransactionRequest{Date: "2025-09-10T12:00:00Z"}, wantErr: domain.ErrInvalidDate},
+		{name: "no such day", req: CreateTransactionRequest{Date: "2025-02-30"}, wantErr: domain.ErrInvalidDate},
 	}
 
 	for _, tt := range tests {
@@ -72,7 +72,7 @@ func TestNewTransactionResponse(t *testing.T) {
 	// The first half hour of the day in the local zone, given in UTC-12: the
 	// response shows the local day, the one the budget periods use.
 	date := time.Date(2025, time.September, 10, 0, 30, 0, 0, time.Local)
-	tx := ledger.Transaction{
+	tx := domain.Transaction{
 		ID: 7, Amount: 450, Category: "еда", Description: "ланч",
 		Date: date.In(time.FixedZone("UTC-12", -12*60*60)),
 	}
@@ -87,7 +87,7 @@ func TestBudgetConversion(t *testing.T) {
 	t.Parallel()
 
 	req := CreateBudgetRequest{Category: "еда", Limit: 5000, Period: "month"}
-	b := ledger.Budget{Category: "еда", Limit: 5000, Period: ledger.PeriodMonth}
+	b := domain.Budget{Category: "еда", Limit: 5000, Period: domain.PeriodMonth}
 	if got := toBudget(req); got != b {
 		t.Errorf("toBudget() = %+v, want %+v", got, b)
 	}
@@ -113,7 +113,7 @@ func TestReportRange(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, time.February, 14, 18, 0, 0, 0, time.Local)
-	day := ledger.Day
+	day := domain.Day
 	tests := []struct {
 		name     string
 		query    url.Values
@@ -167,8 +167,8 @@ func TestReportRange(t *testing.T) {
 			wantFrom: day(9999, time.December, 15),
 			wantTo:   day(9999, time.December, 30),
 		},
-		{name: "invalid first day", query: url.Values{"from": {"01.02.2026"}}, wantErr: ledger.ErrInvalidDate},
-		{name: "invalid last day", query: url.Values{"to": {"2026-02-30"}}, wantErr: ledger.ErrInvalidDate},
+		{name: "invalid first day", query: url.Values{"from": {"01.02.2026"}}, wantErr: domain.ErrInvalidDate},
+		{name: "invalid last day", query: url.Values{"to": {"2026-02-30"}}, wantErr: domain.ErrInvalidDate},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

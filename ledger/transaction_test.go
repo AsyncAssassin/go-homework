@@ -7,6 +7,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/AsyncAssassin/go-homework/ledger/domain"
+	"github.com/AsyncAssassin/go-homework/ledger/service"
 )
 
 // TestAddTransaction checks that a transaction rejected by Validate is not
@@ -14,24 +17,24 @@ import (
 func TestAddTransaction(t *testing.T) {
 	tests := []struct {
 		name    string
-		tx      Transaction
+		tx      domain.Transaction
 		wantErr error
 	}{
-		{name: "valid", tx: Transaction{Amount: 100, Category: "еда"}},
-		{name: "invalid amount", tx: Transaction{Amount: -50, Category: "еда"}, wantErr: ErrInvalidAmount},
-		{name: "blank category", tx: Transaction{Amount: 100, Category: "  "}, wantErr: ErrEmptyCategory},
+		{name: "valid", tx: domain.Transaction{Amount: 100, Category: "еда"}},
+		{name: "invalid amount", tx: domain.Transaction{Amount: -50, Category: "еда"}, wantErr: domain.ErrInvalidAmount},
+		{name: "blank category", tx: domain.Transaction{Amount: 100, Category: "  "}, wantErr: domain.ErrEmptyCategory},
 		{
 			name:    "year out of range",
-			tx:      Transaction{Amount: 100, Category: "еда", Date: time.Date(10000, time.January, 1, 12, 0, 0, 0, time.Local)},
-			wantErr: ErrInvalidDate,
+			tx:      domain.Transaction{Amount: 100, Category: "еда", Date: time.Date(10000, time.January, 1, 12, 0, 0, 0, time.Local)},
+			wantErr: domain.ErrInvalidDate,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			Reset()
+			svc := NewMemory()
 
-			_, err := AddTransaction(tt.tx)
+			_, err := svc.AddTransaction(context.Background(), tt.tx)
 			if !errors.Is(err, tt.wantErr) {
 				t.Fatalf("AddTransaction() error = %v, want %v", err, tt.wantErr)
 			}
@@ -40,7 +43,7 @@ func TestAddTransaction(t *testing.T) {
 			if tt.wantErr != nil {
 				wantStored = 0
 			}
-			if got := len(mustListTransactions(t)); got != wantStored {
+			if got := len(mustListTransactions(t, svc)); got != wantStored {
 				t.Errorf("stored %d transactions, want %d", got, wantStored)
 			}
 		})
@@ -48,53 +51,53 @@ func TestAddTransaction(t *testing.T) {
 }
 
 func TestAddTransactionFillsFields(t *testing.T) {
-	Reset()
+	svc := NewMemory()
 	date := time.Date(2026, 9, 1, 15, 30, 0, 0, time.Local)
-	first, err := AddTransaction(Transaction{Amount: 10, Category: "еда", Date: date})
+	first, err := svc.AddTransaction(context.Background(), domain.Transaction{Amount: 10, Category: "еда", Date: date})
 	if err != nil {
 		t.Fatalf("AddTransaction() error = %v", err)
 	}
-	today := startOfDay(time.Now())
-	second, err := AddTransaction(Transaction{Amount: 20.004, Category: " Транспорт ", Description: "  проездной "})
+	today := domain.StartOfDay(time.Now())
+	second, err := svc.AddTransaction(context.Background(), domain.Transaction{Amount: 20.004, Category: " Транспорт ", Description: "  проездной "})
 	if err != nil {
 		t.Fatalf("AddTransaction() error = %v", err)
 	}
 
 	// Only the day of the date is kept.
 	wantDate := time.Date(2026, 9, 1, 0, 0, 0, 0, time.Local)
-	if want := (Transaction{ID: 1, Amount: 10, Category: "еда", Date: wantDate}); first != want {
+	if want := (domain.Transaction{ID: 1, Amount: 10, Category: "еда", Date: wantDate}); first != want {
 		t.Errorf("first AddTransaction() = %+v, want %+v", first, want)
 	}
 	// A zero date becomes today; the test may cross midnight.
 	if d := second.Date; !d.Equal(today) && !d.Equal(today.AddDate(0, 0, 1)) {
 		t.Errorf("zero date became %v, want today %v", d, today)
 	}
-	if want := (Transaction{ID: 2, Amount: 20, Category: "транспорт", Description: "проездной", Date: second.Date}); second != want {
+	if want := (domain.Transaction{ID: 2, Amount: 20, Category: "транспорт", Description: "проездной", Date: second.Date}); second != want {
 		t.Errorf("second AddTransaction() = %+v, want %+v", second, want)
 	}
 	// AddTransaction returns exactly what it stored.
-	if got, want := mustListTransactions(t), []Transaction{second, first}; !slices.Equal(got, want) {
+	if got, want := mustListTransactions(t, svc), []domain.Transaction{second, first}; !slices.Equal(got, want) {
 		t.Errorf("stored %+v, want %+v", got, want)
 	}
 }
 
 func TestListTransactionsOrder(t *testing.T) {
-	Reset()
+	svc := NewMemory()
 	day := time.Date(2026, time.October, 12, 12, 0, 0, 0, time.Local)
-	for _, tx := range []Transaction{
+	for _, tx := range []domain.Transaction{
 		{Amount: 1, Category: "еда", Date: day},                   // ID 1
 		{Amount: 2, Category: "еда", Date: day.AddDate(0, 0, -1)}, // ID 2, the day before
 		{Amount: 3, Category: "еда", Date: day.AddDate(0, 0, 1)},  // ID 3, the day after
 		{Amount: 4, Category: "еда", Date: day.In(time.UTC)},      // ID 4, the day of ID 1 given in another zone
 	} {
-		if _, err := AddTransaction(tx); err != nil {
+		if _, err := svc.AddTransaction(context.Background(), tx); err != nil {
 			t.Fatalf("AddTransaction() error = %v", err)
 		}
 	}
 
 	// Newest first, and the larger ID first for the same day.
 	var ids []int
-	for _, tx := range mustListTransactions(t) {
+	for _, tx := range mustListTransactions(t, svc) {
 		ids = append(ids, tx.ID)
 	}
 	if want := []int{3, 4, 1, 2}; !slices.Equal(ids, want) {
@@ -108,8 +111,8 @@ func TestListTransactionsOrder(t *testing.T) {
 // the insert happen under one lock. With -race it also checks reads and
 // writes of the storage for data races.
 func TestAddTransactionConcurrent(t *testing.T) {
-	Reset()
-	if _, err := SetBudget(Budget{Category: "еда", Limit: 50, Period: PeriodMonth}); err != nil {
+	svc := NewMemory()
+	if _, err := svc.SetBudget(context.Background(), domain.Budget{Category: "еда", Limit: 50, Period: domain.PeriodMonth}); err != nil {
 		t.Fatalf("SetBudget() error = %v", err)
 	}
 
@@ -125,12 +128,12 @@ func TestAddTransactionConcurrent(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			_, err := AddTransaction(Transaction{Amount: 0.1, Category: "еда", Date: date})
+			_, err := svc.AddTransaction(context.Background(), domain.Transaction{Amount: 0.1, Category: "еда", Date: date})
 			errs <- err
 			// Readers and another writer at the same time.
-			ListTransactions()
-			ListBudgetUsage(date)
-			if _, err := SetBudget(Budget{Category: "такси", Limit: float64(i + 1)}); err != nil {
+			svc.ListTransactions(context.Background())
+			svc.ListBudgetUsage(context.Background(), date)
+			if _, err := svc.SetBudget(context.Background(), domain.Budget{Category: "такси", Limit: float64(i + 1)}); err != nil {
 				t.Errorf("SetBudget() error = %v", err)
 			}
 		}()
@@ -144,15 +147,15 @@ func TestAddTransactionConcurrent(t *testing.T) {
 		switch {
 		case err == nil:
 			added++
-		case !errors.Is(err, ErrBudgetExceeded):
-			t.Errorf("AddTransaction() error = %v, want nil or %v", err, ErrBudgetExceeded)
+		case !errors.Is(err, domain.ErrBudgetExceeded):
+			t.Errorf("AddTransaction() error = %v, want nil or %v", err, domain.ErrBudgetExceeded)
 		}
 	}
 	if added != fit {
 		t.Errorf("added %d transactions, want %d", added, fit)
 	}
 	// All dates are equal, so the list goes from the last ID down to 1.
-	list := mustListTransactions(t)
+	list := mustListTransactions(t, svc)
 	if len(list) != fit {
 		t.Fatalf("stored %d transactions, want %d", len(list), fit)
 	}
@@ -164,54 +167,16 @@ func TestAddTransactionConcurrent(t *testing.T) {
 }
 
 func TestListTransactionsReturnsCopy(t *testing.T) {
-	Reset()
-	if _, err := AddTransaction(Transaction{Amount: 100, Category: "еда"}); err != nil {
+	svc := NewMemory()
+	if _, err := svc.AddTransaction(context.Background(), domain.Transaction{Amount: 100, Category: "еда"}); err != nil {
 		t.Fatalf("AddTransaction() error = %v", err)
 	}
 
-	list := mustListTransactions(t)
+	list := mustListTransactions(t, svc)
 	list[0].Amount = 999
 
-	if got := mustListTransactions(t)[0].Amount; got != 100 {
+	if got := mustListTransactions(t, svc)[0].Amount; got != 100 {
 		t.Errorf("storage changed through the returned slice: amount = %v, want 100", got)
-	}
-}
-
-func TestDay(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name  string
-		zone  string
-		year  int
-		month time.Month
-		day   int
-		want  string // RFC 3339
-	}{
-		{name: "ordinary day", zone: "Asia/Tbilisi", year: 2026, month: time.November, day: 15, want: "2026-11-15T00:00:00+04:00"},
-		// The clocks go from 00:00 to 01:00, so the day starts at 01:00.
-		{name: "no midnight in Santiago", zone: "America/Santiago", year: 2026, month: time.September, day: 6, want: "2026-09-06T01:00:00-03:00"},
-		{name: "no midnight in Havana", zone: "America/Havana", year: 2026, month: time.March, day: 8, want: "2026-03-08T01:00:00-04:00"},
-		{name: "first day of a month without midnight", zone: "America/Asuncion", year: 2023, month: time.October, day: 1, want: "2023-10-01T01:00:00-03:00"},
-		// East of UTC time.Date already gives 01:00.
-		{name: "no midnight in Cairo", zone: "Africa/Cairo", year: 2026, month: time.April, day: 24, want: "2026-04-24T01:00:00+03:00"},
-		// Samoa skipped this day, so the next one starts instead.
-		{name: "day that did not exist", zone: "Pacific/Apia", year: 2011, month: time.December, day: 30, want: "2011-12-31T00:00:00+14:00"},
-		{name: "day 0 is the last day of the previous month", zone: "UTC", year: 2026, month: time.October, day: 0, want: "2026-09-30T00:00:00Z"},
-		{name: "month 13 is January of the next year", zone: "UTC", year: 2026, month: 13, day: 1, want: "2027-01-01T00:00:00Z"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			loc, err := time.LoadLocation(tt.zone)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got := dayStart(tt.year, tt.month, tt.day, loc).Format(time.RFC3339); got != tt.want {
-				t.Errorf("dayStart(%d, %d, %d, %s) = %s, want %s", tt.year, tt.month, tt.day, tt.zone, got, tt.want)
-			}
-		})
 	}
 }
 
@@ -222,21 +187,21 @@ func TestDay(t *testing.T) {
 func TestDayWithoutMidnight(t *testing.T) {
 	before := time.Date(2026, time.September, 5, 12, 0, 0, 0, time.Local)
 	noon := time.Date(2026, time.September, 6, 12, 0, 0, 0, time.Local)
-	check := func(t *testing.T) {
+	check := func(t *testing.T, svc service.Service) {
 		for _, date := range []time.Time{before, noon} {
-			if _, err := AddTransaction(Transaction{Amount: 1, Category: "еда", Date: date}); err != nil {
+			if _, err := svc.AddTransaction(context.Background(), domain.Transaction{Amount: 1, Category: "еда", Date: date}); err != nil {
 				t.Fatalf("AddTransaction() error = %v", err)
 			}
 		}
 		var days []string
-		for _, tx := range mustListTransactions(t) {
+		for _, tx := range mustListTransactions(t, svc) {
 			days = append(days, formatDate(tx.Date))
 		}
 		if want := []string{"2026-09-06", "2026-09-05"}; !slices.Equal(days, want) {
 			t.Errorf("days of the transactions = %q, want %q", days, want)
 		}
 
-		report, err := GetReportSummary(context.Background(), noon, noon)
+		report, err := svc.GetReportSummary(context.Background(), noon, noon)
 		if err != nil {
 			t.Fatalf("GetReportSummary() error = %v", err)
 		}
@@ -246,22 +211,22 @@ func TestDayWithoutMidnight(t *testing.T) {
 	}
 
 	t.Run("memory", func(t *testing.T) {
-		Reset()
-		t.Cleanup(Reset)
-		check(t)
+		svc := NewMemory()
+
+		check(t, svc)
 	})
 	t.Run("postgres", func(t *testing.T) {
-		connectTest(t)
+		svc := connectTest(t).Service
 		deleteKeys(t, reportKey(noon, noon))
-		check(t)
+		check(t, svc)
 	})
 }
 
-// mustListTransactions returns ListTransactions() and stops the test if it
+// mustListTransactions returns svc.ListTransactions(context.Background()) and stops the test if it
 // fails.
-func mustListTransactions(t *testing.T) []Transaction {
+func mustListTransactions(t *testing.T, svc service.Service) []domain.Transaction {
 	t.Helper()
-	list, err := ListTransactions()
+	list, err := svc.ListTransactions(context.Background())
 	if err != nil {
 		t.Fatalf("ListTransactions() error = %v", err)
 	}

@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"os"
 	"testing"
+
+	"github.com/AsyncAssassin/go-homework/ledger"
 )
 
 func TestMain(m *testing.M) {
@@ -45,7 +47,7 @@ func TestRouter(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rec := serve(t, tt.method, tt.path, "")
+			rec := serve(t, ledger.NewMemory(), tt.method, tt.path, "")
 			checkResponse(t, rec, tt.wantStatus, tt.wantBody)
 			if got := rec.Header().Get("Allow"); got != tt.wantAllow {
 				t.Errorf("Allow = %q, want %q", got, tt.wantAllow)
@@ -57,7 +59,7 @@ func TestRouter(t *testing.T) {
 func TestRouterRedirect(t *testing.T) {
 	// ServeMux redirects to the clean path, with 301 in Go 1.22 and 307 in
 	// later versions. The response still has the JSON Content-Type.
-	rec := serve(t, http.MethodGet, "/api//budgets", "")
+	rec := serve(t, ledger.NewMemory(), http.MethodGet, "/api//budgets", "")
 	if rec.Code < 300 || rec.Code > 399 {
 		t.Errorf("status = %d, want a redirect", rec.Code)
 	}
